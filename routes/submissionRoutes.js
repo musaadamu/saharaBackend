@@ -1,18 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const submissionController = require('../controllers/submissionController');
+const authMiddleware = require('../middleware/authMiddleware');
 
-// Create a new submission
-router.post('/', submissionController.createSubmission);
+// Upload submission with file
+router.post(
+    '/',
+    authMiddleware.protect,
+    submissionController.uploadMiddleware,
+    submissionController.uploadSubmission
+);
 
-// Get all submissions
+// Get all submissions with pagination and filtering
 router.get('/', submissionController.getSubmissions);
+
+// Search submissions
+router.get('/search', submissionController.searchSubmissions);
 
 // Get a single submission by ID
 router.get('/:id', submissionController.getSubmissionById);
 
 // Update submission status
-router.put('/:id/status', submissionController.updateSubmissionStatus);
+router.patch('/:id/status', submissionController.updateSubmissionStatus);
 
 // Delete a submission
 router.delete('/:id', submissionController.deleteSubmission);

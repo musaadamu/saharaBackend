@@ -2,15 +2,19 @@ const express = require('express');
 const router = express.Router();
 const { 
     downloadDocxFile, 
-    downloadPdfFile, 
-    readFileContent 
+    downloadPdfFile
 } = require('../controllers/journalDownloadController');
+const { validateJournalId } = require('../middleware/validateJournal');
 
-// Routes for downloading files
-router.get('/journals/:id/download/pdf', downloadPdfFile);
-router.get('/journals/:id/download/docx', downloadDocxFile);
+// Match frontend URL pattern exactly
+router.get('/:id/download/pdf', 
+    validateJournalId,
+    downloadPdfFile
+);
 
-// Optional: Route for reading file content
-router.get('/journals/:id/content', readFileContent);
+router.get('/:id/download/docx', 
+    validateJournalId,
+    downloadDocxFile
+);
 
 module.exports = router;
