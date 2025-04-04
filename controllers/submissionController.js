@@ -70,7 +70,10 @@ const validateSubmissionInput = (req) => {
         errors.push('Keywords are required');
     }
     
-    if (!req.file) errors.push('DOCX file is required');
+    if (!req.file) {
+        errors.push('DOCX file is required');
+        console.error('No file uploaded. Received fields:', Object.keys(req.body));
+    }
 
     return errors;
 };
@@ -143,7 +146,7 @@ exports.uploadSubmission = async (req, res) => {
             submission: newSubmission 
         });
     } catch (error) {
-        console.error(error);
+        console.error('Upload error:', error);
         
         if (req.file) {
             await fsPromises.unlink(req.file.path).catch(() => {});
@@ -322,5 +325,27 @@ exports.searchSubmissions = async (req, res) => {
     }
 };
 
-// Export multer upload middleware
-exports.uploadMiddleware = upload.single("wordFile");
+// Enhanced multer middleware with better error handling
+exports.uploadMiddleware = (req, res, next) => {
+    upload.single("wordFile")(req, res, function(err) {
+        if (err) {
+            console.error('Multer error:', err);
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(413).json({ 
+                    message: "File too large (max 50MB)" 
+                });
+            }
+            if (err.message.includes('Unexpected field')) {
+                return res.status(400).json({ 
+                    message: "Invalid file field name - must be 'wordFile'",
+                    details: `Received fields: ${JSON.stringify(Object.keys(req.body))}`
+                });
+            }
+            return res.status(500).json({ 
+                message: "File upload failed",
+                error: err.message 
+            });
+        }
+        next();
+    });
+};
