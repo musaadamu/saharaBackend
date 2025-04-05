@@ -327,7 +327,7 @@ exports.searchSubmissions = async (req, res) => {
 
 // Enhanced multer middleware with better error handling
 exports.uploadMiddleware = (req, res, next) => {
-    upload.single("wordFile")(req, res, function(err) {
+    upload.single("file")(req, res, function(err) {
         if (err) {
             console.error('Multer error:', err);
             if (err.code === 'LIMIT_FILE_SIZE') {
@@ -337,7 +337,7 @@ exports.uploadMiddleware = (req, res, next) => {
             }
             if (err.message.includes('Unexpected field')) {
                 return res.status(400).json({ 
-                    message: "Invalid file field name - must be 'wordFile'",
+                    message: "Invalid file field name - must be 'file'",
                     details: `Received fields: ${JSON.stringify(Object.keys(req.body))}`
                 });
             }
