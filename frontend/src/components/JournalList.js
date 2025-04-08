@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import api from '../services/api';
+import api, { baseURL } from '../services/api';
 import './JournalList.css';
+
+// Log the API base URL for debugging
+console.log('API Base URL:', baseURL);
 
 const JournalList = () => {
     const navigate = useNavigate();
@@ -23,14 +26,33 @@ const JournalList = () => {
         setLoading(true);
         setError('');
         try {
-            const { data } = await api.get('/journals', {
-                params: { page, limit: 10, sortBy: 'createdAt', order: 'desc' }
+            // Verify auth token exists
+            const token = localStorage.getItem('authToken');
+            if (!token) {
+                throw new Error('No authentication token found');
+            }
+
+            const { data } = await api.journals.getAll({ 
+                page, 
+                limit: 10, 
+                sortBy: 'createdAt', 
+                order: 'desc' 
             });
             setJournals(data.journals || []);
             setPagination(data.pagination || { currentPage: page, totalPages: 1, totalJournals: 0 });
         } catch (err) {
-            setError(err.response?.data?.message || 'Failed to fetch journals');
-            toast.error(error);
+            const errorMsg = err.response?.status === 401 
+                ? 'Session expired. Please login again.'
+                : err.response?.data?.message || 'Failed to fetch journals';
+            
+            setError(errorMsg);
+            toast.error(errorMsg);
+
+            // Redirect to login if unauthorized
+            if (err.response?.status === 401) {
+                localStorage.removeItem('authToken');
+                navigate('/login');
+            }
         } finally {
             setLoading(false);
         }
@@ -38,7 +60,7 @@ const JournalList = () => {
 
     const handleDownload = async (id, fileType) => {
         try {
-            const { data } = await api.get(`/journals/${id}/download/${fileType}`, { responseType: 'blob' });
+            const { data } = await api.journals.download(id, fileType);
             const url = window.URL.createObjectURL(new Blob([data]));
             const link = document.createElement('a');
             link.href = url;

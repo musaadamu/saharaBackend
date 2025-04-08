@@ -1,12 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const submissionController = require('../controllers/submissionController');
-const authMiddleware = require('../middleware/authMiddleware');
 
 // Upload submission with file
 router.post(
     '/',
-    authMiddleware.protect,
     submissionController.uploadMiddleware,
     submissionController.uploadSubmission
 );

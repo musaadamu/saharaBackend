@@ -11,8 +11,12 @@ const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
 
+// Middleware imports
+const { protect } = require('./middleware/authMiddleware');
+
 // Route imports
 const submissionRoutes = require('./routes/submissionRoutes');
+const submissionDownloadRoutes = require('./routes/submissionDownloadRoutes');
 const journalRoutes = require('./routes/journalRoutes');
 const journalDownloadRoutes = require('./routes/journalDownloadRoutes');
 const authRoutes = require('./routes/authRoutes');
@@ -33,15 +37,20 @@ const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 console.log(`Environment: ${isProduction ? 'Production' : 'Development'}`);
 
-// ...existing middleware setup...
+// Middleware setup
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+app.use(morgan('dev'));
 
-// Enhanced CORS Configuration
+// Handle multipart/form-data for file uploads
+const multer = require('multer');
+const upload = multer();
+app.use(upload.any());
+
+// CORS Configuration for development and production
 const allowedOrigins = [
-    'http://localhost:3000',
-    'https://sahara-journal-frontend.vercel.app',
-    'https://sahara-journal-frontend-git-main.vercel.app',
-    'https://sahara-journal-frontend-*.vercel.app', // Allow all Vercel preview deployments
-    process.env.CLIENT_URL
+    'http://localhost:3000', // Local frontend development
+    'https://sahara-journal-frontend.vercel.app' // Production frontend
 ].filter(Boolean);
 
 console.log('Allowed CORS origins:', allowedOrigins);
@@ -69,7 +78,8 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Authorization']
 }));
 
 // Add headers for all responses
@@ -87,7 +97,15 @@ app.get('/health', (req, res) => {
     });
 });
 
-// ...existing routes...
+// Mount routes
+app.use('/auth', authRoutes);
+app.use('/journals', journalRoutes);
+app.use('/journals', journalDownloadRoutes);
+app.use('/submissions', submissionRoutes);
+app.use('/submissions', submissionDownloadRoutes);
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Improved MongoDB Connection
 const connectDB = async () => {
@@ -109,7 +127,7 @@ const connectDB = async () => {
         
         app.listen(PORT, () => {
             console.log(`🚀 Server running on port ${PORT}`);
-            console.log(`Backend URL: ${isProduction ? 'https://saharabackend-v190.onrender.com' : `http://localhost:${PORT}`}`);
+        console.log(`Backend URL: http://localhost:${PORT}`);
         });
     } catch (err) {
         console.error('❌ MongoDB connection error:', err);
