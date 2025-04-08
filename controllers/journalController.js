@@ -5,7 +5,6 @@ const multer = require("multer");
 const path = require("path");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
-const mongoose = require("mongoose");
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -23,7 +22,6 @@ const storage = multer.diskStorage({
     },
 });
 
-// Improved file filter to only allow .docx files
 const fileFilter = (req, file, cb) => {
     const extname = path.extname(file.originalname).toLowerCase();
     const mimetype = file.mimetype;
@@ -33,7 +31,7 @@ const fileFilter = (req, file, cb) => {
          mimetype === 'application/vnd.ms-word');
 
     if (isDocx) {
-        return cb(null, true);
+        cb(null, true);
     } else {
         cb(new Error('Only .docx files are allowed!'), false);
     }
@@ -43,54 +41,28 @@ const upload = multer({
     storage, 
     fileFilter,
     limits: { 
-        fileSize: 50 * 1024 * 1024 // 50MB file size limit
-    } 
+        fileSize: 50 * 1024 * 1024,
+        files: 1,
+        parts: 50
+    }
 });
 
-// Validation function
-const validateJournalInput = (req) => {
-    const { title, abstract, authors, keywords } = req.body;
-    const errors = [];
-
-    if (!title || (typeof title === 'string' && title.trim() === '')) {
-        errors.push('Title is required');
-    }
-    
-    if (!abstract || (typeof abstract === 'string' && abstract.trim() === '')) {
-        errors.push('Abstract is required');
-    }
-    
-    if (!authors || (Array.isArray(authors) && authors.length === 0) || (!Array.isArray(authors) && !authors)) {
-        errors.push('At least one author is required');
-    }
-    
-    if (!keywords || 
-        (Array.isArray(keywords) && keywords.length === 0) || 
-        (typeof keywords === 'string' && keywords.trim() === '')) {
-        errors.push('Keywords are required');
-    }
-    
-    if (!req.file) errors.push('DOCX file is required');
-
-    return errors;
-};
+exports.uploadMiddleware = upload.single('file');
 
 // Upload and convert DOCX to PDF
 exports.uploadJournal = async (req, res) => {
     try {
-        const validationErrors = validateJournalInput(req);
-        if (validationErrors.length > 0) {
-            if (req.file) {
-                await fsPromises.unlink(req.file.path).catch(() => {});
-            }
-            return res.status(400).json({ 
-                message: "Validation Failed", 
-                errors: validationErrors 
-            });
-        }
-
         const { title, abstract, authors, keywords } = req.body;
         const file = req.file;
+
+        if (!file) {
+            return res.status(400).json({ message: "No file uploaded" });
+        }
+
+        // Validate required fields
+        if (!title || !abstract) {
+            return res.status(400).json({ message: "Title and abstract are required" });
+        }
 
         const docxFilePath = file.path;
         const pdfFilePath = path.join(
@@ -98,125 +70,87 @@ exports.uploadJournal = async (req, res) => {
             `${path.basename(docxFilePath, '.docx')}.pdf`
         );
 
-        let extractedText;
+        // Convert DOCX to PDF
+        let result;
         try {
-            const buffer = await fsPromises.readFile(docxFilePath);
-            extractedText = await mammoth.extractRawText({ buffer });
-        } catch (error) {
-            throw new Error('Failed to extract text from DOCX');
+            result = await mammoth.extractRawText({ path: docxFilePath });
+        } catch (err) {
+            console.error('DOCX conversion error:', err);
+            await fsPromises.unlink(docxFilePath); // Clean up uploaded file
+            return res.status(400).json({ message: "Invalid DOCX file format" });
         }
 
+        // Create PDF
         await new Promise((resolve, reject) => {
             const pdfDoc = new PDFDocument();
-            const pdfStream = fs.createWriteStream(pdfFilePath);
-            
-            pdfDoc.pipe(pdfStream);
-            pdfDoc.text(extractedText.value);
+            const stream = fs.createWriteStream(pdfFilePath);
+            pdfDoc.pipe(stream);
+            pdfDoc.text(result.value);
             pdfDoc.end();
-
-            pdfStream.on('finish', resolve);
-            pdfStream.on('error', reject);
+            
+            stream.on('finish', resolve);
+            stream.on('error', reject);
         });
 
-        const authorIds = Array.isArray(authors) 
-            ? authors.map(author => author.trim()) 
-            : [authors.trim()];
-
-        const processedKeywords = Array.isArray(keywords) 
-            ? keywords.map(kw => kw.trim())
-            : keywords.split(",").map((kw) => kw.trim());
-
-        const newJournal = new Journal({
-            title: title.trim(),
-            abstract: abstract.trim(),
-            authors: authorIds,
+        // Create journal record
+        const journal = new Journal({
+            title,
+            abstract,
+            authors: Array.isArray(authors) ? authors : [authors],
+            keywords: Array.isArray(keywords) ? keywords : keywords.split(',').map(k => k.trim()),
             docxFilePath,
             pdfFilePath,
-            keywords: processedKeywords,
-            status: "submitted",
+            status: "submitted"
         });
 
-        await newJournal.save();
+        await journal.save();
 
-        res.status(201).json({ 
-            message: "Journal uploaded successfully", 
-            journal: newJournal 
+        res.status(201).json({
+            message: "Journal uploaded successfully",
+            journal
         });
     } catch (error) {
-        console.error(error);
+        console.error('Upload error:', error);
         
-        if (req.file) {
-            await fsPromises.unlink(req.file.path).catch(() => {});
-            const potentialPdfPath = req.file.path.replace('.docx', '.pdf');
-            await fsPromises.unlink(potentialPdfPath).catch(() => {});
+        // Clean up files if they were created
+        if (req.file?.path) {
+            try { await fsPromises.unlink(req.file.path); } catch (err) {}
+        }
+        if (pdfFilePath) {
+            try { await fsPromises.unlink(pdfFilePath); } catch (err) {}
         }
 
         res.status(500).json({ 
-            message: "Failed to upload journal", 
-            error: error.message 
+            message: "Failed to upload journal",
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-// Get all journals with pagination and filtering
+// Get all journals
 exports.getJournals = async (req, res) => {
     try {
-        console.log('GET Journals Request Received');
-        console.log('Query Parameters:', req.query);
-
-        const { 
-            page = 1, 
-            limit = 10, 
-            status, 
-            sortBy = 'createdAt', 
-            sortOrder = 'desc' 
-        } = req.query;
-
-        const filter = {};
-        if (status) filter.status = status;
-
-        const sort = {};
-        sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
-
-        const journals = await Journal.find(filter)
-            // .populate("authors", "name email")
-            .sort(sort)
-            .skip((page - 1) * limit)
-            .limit(Number(limit));
-
-        const total = await Journal.countDocuments(filter);
-
-        console.log('Journals Found:', journals.length);
-
-        res.json({
-            journals,
-            currentPage: Number(page),
-            totalPages: Math.ceil(total / limit),
-            totalJournals: total
-        });
+        const journals = await Journal.find().sort({ createdAt: -1 });
+        res.json(journals);
     } catch (error) {
-        console.error('Get Journals Error:', error);
         res.status(500).json({ 
-            message: "Failed to retrieve journals", 
+            message: "Failed to get journals", 
             error: error.message 
         });
     }
 };
 
-// Get a single journal by ID
+// Get journal by ID
 exports.getJournalById = async (req, res) => {
     try {
-        const journal = await Journal.findById(req.params.id)
-            // .populate("authors", "name email");
-        
+        const journal = await Journal.findById(req.params.id);
         if (!journal) {
             return res.status(404).json({ message: "Journal not found" });
         }
-
         res.json(journal);
     } catch (error) {
         res.status(500).json({ 
-            message: "Failed to retrieve journal", 
+            message: "Failed to get journal", 
             error: error.message 
         });
     }
@@ -225,31 +159,16 @@ exports.getJournalById = async (req, res) => {
 // Update journal status
 exports.updateJournalStatus = async (req, res) => {
     try {
-        const { id } = req.params;
         const { status } = req.body;
-
-        const validStatuses = ['submitted', 'under-review', 'accepted', 'rejected'];
-        if (!validStatuses.includes(status)) {
-            return res.status(400).json({ 
-                message: "Invalid status", 
-                validStatuses 
-            });
-        }
-
         const journal = await Journal.findByIdAndUpdate(
-            id, 
-            { status }, 
-            { new: true, runValidators: true }
-        ).populate("authors", "name email");
-
+            req.params.id,
+            { status },
+            { new: true }
+        );
         if (!journal) {
             return res.status(404).json({ message: "Journal not found" });
         }
-
-        res.json({
-            message: "Journal status updated successfully",
-            journal
-        });
+        res.json(journal);
     } catch (error) {
         res.status(500).json({ 
             message: "Failed to update journal status", 
@@ -258,31 +177,23 @@ exports.updateJournalStatus = async (req, res) => {
     }
 };
 
-// Delete a journal
+// Delete journal
 exports.deleteJournal = async (req, res) => {
     try {
-        const journal = await Journal.findById(req.params.id);
+        const journal = await Journal.findByIdAndDelete(req.params.id);
         if (!journal) {
             return res.status(404).json({ message: "Journal not found" });
         }
-
+        
+        // Delete associated files
         try {
-            if (journal.docxFilePath) {
-                await fsPromises.unlink(journal.docxFilePath);
-            }
-            if (journal.pdfFilePath) {
-                await fsPromises.unlink(journal.pdfFilePath);
-            }
-        } catch (fileError) {
-            console.warn("Could not delete associated files:", fileError);
+            await fsPromises.unlink(journal.docxFilePath);
+            await fsPromises.unlink(journal.pdfFilePath);
+        } catch (err) {
+            console.error("Error deleting files:", err);
         }
 
-        await journal.deleteOne();
-
-        res.json({ 
-            message: "Journal deleted successfully",
-            deletedJournal: journal 
-        });
+        res.json({ message: "Journal deleted successfully" });
     } catch (error) {
         res.status(500).json({ 
             message: "Failed to delete journal", 
@@ -294,35 +205,20 @@ exports.deleteJournal = async (req, res) => {
 // Search journals
 exports.searchJournals = async (req, res) => {
     try {
-        const { query, field = 'title' } = req.query;
-
+        const { query } = req.query;
         if (!query) {
             return res.status(400).json({ message: "Search query is required" });
         }
 
-        const searchRegex = new RegExp(query, 'i');
+        const journals = await Journal.find({
+            $or: [
+                { title: { $regex: query, $options: 'i' } },
+                { abstract: { $regex: query, $options: 'i' } },
+                { keywords: { $regex: query, $options: 'i' } }
+            ]
+        }).sort({ createdAt: -1 });
 
-        const searchFields = {
-            'title': { title: searchRegex },
-            'keywords': { keywords: searchRegex },
-            'abstract': { abstract: searchRegex }
-        };
-
-        if (!searchFields[field]) {
-            return res.status(400).json({ 
-                message: "Invalid search field", 
-                validFields: Object.keys(searchFields) 
-            });
-        }
-
-        const journals = await Journal.find(searchFields[field])
-            // .populate("authors", "name email")
-            .limit(20); // Limit to 20 results
-
-        res.json({
-            journals,
-            totalResults: journals.length
-        });
+        res.json(journals);
     } catch (error) {
         res.status(500).json({ 
             message: "Search failed", 
@@ -330,6 +226,3 @@ exports.searchJournals = async (req, res) => {
         });
     }
 };
-
-// Export multer upload middleware
-exports.uploadMiddleware = upload.single("file");

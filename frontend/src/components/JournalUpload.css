@@ -1,0 +1,71 @@
+/* Main container styling */
+.min-h-screen {
+    min-height: 100vh;
+}
+
+/* Form styling */
+.bg-gray-50 {
+    background-color: #f9fafb;
+}
+
+.max-w-2xl {
+    max-width: 42rem;
+}
+
+.shadow-xl {
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Input fields */
+.border-gray-300 {
+    border-color: #d1d5db;
+}
+
+.focus\:ring-blue-500:focus {
+    --tw-ring-color: #3b82f6;
+}
+
+.focus\:border-blue-500:focus {
+    border-color: #3b82f6;
+}
+
+/* Buttons */
+.bg-blue-600 {
+    background-color: #2563eb;
+}
+
+.hover\:bg-blue-700:hover {
+    background-color: #1d4ed8;
+}
+
+/* File upload area */
+.border-dashed {
+    border-style: dashed;
+}
+
+/* Loading spinner */
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+    .px-4 {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    .text-sm {
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+    }
+}

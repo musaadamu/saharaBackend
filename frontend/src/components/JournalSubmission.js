@@ -53,8 +53,21 @@ const JournalSubmission = () => {
             const submissionData = new FormData();
             submissionData.append('title', formData.title);
             submissionData.append('abstract', formData.abstract);
-            submissionData.append('keywords', formData.keywords);
-            submissionData.append('authors', formData.authors);
+            
+            // Process authors as JSON string
+            const authorNames = formData.authors
+                .split(',')
+                .map(name => name.trim())
+                .filter(Boolean);
+            submissionData.append('authors', JSON.stringify(authorNames));
+            
+            // Process keywords as JSON string
+            const keywords = formData.keywords
+                .split(',')
+                .map(kw => kw.trim())
+                .filter(Boolean);
+            submissionData.append('keywords', JSON.stringify(keywords));
+            
             if (formData.file) {
                 submissionData.append('file', formData.file);
             }
