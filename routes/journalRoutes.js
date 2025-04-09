@@ -25,14 +25,14 @@ router.post("/", (req, res, next) => {
     });
 }, journalController.uploadJournal);
 
-// Get all journals
-router.get("/", journalController.getJournals);
+// // Get all journals
+// router.get("/", journalController.getJournals);
 
-// Search journals
-router.get("/search", journalController.searchJournals);
+// // Search journals
+// router.get("/search", journalController.searchJournals);
 
-// Get journal by ID
-router.get("/:id", journalController.getJournalById);
+// // Get journal by ID
+// router.get("/:id", journalController.getJournalById);
 
 // Update journal status
 router.patch("/:id/status", journalController.updateJournalStatus);
@@ -41,3 +41,9 @@ router.patch("/:id/status", journalController.updateJournalStatus);
 router.delete("/:id", journalController.deleteJournal);
 
 module.exports = router;
+
+
+// Public routes
+router.get("/", journalController.getJournals);
+router.get("/search", journalController.searchJournals);
+router.get("/:id", journalController.getJournalById);

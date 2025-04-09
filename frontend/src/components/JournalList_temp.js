@@ -23,22 +23,23 @@ const JournalList = () => {
         setLoading(true);
         setError('');
         try {
-            const response = await api.journals.getAll({ 
-                page, 
-                limit: 10,
-                sortBy: 'createdAt',
-                order: 'desc'
+            console.log('Fetching journals from:', api.defaults.baseURL);
+            const response = await api.get('/journals', {
+                params: { 
+                    page, 
+                    limit: 10,
+                    sortBy: 'createdAt',
+                    order: 'desc'
+                }
             });
+
+            console.log('API Response:', response.data);
 
             if (!response.data) {
                 throw new Error('No data received from server');
             }
 
-            // Handle both array response and paginated response
-            const journalsData = Array.isArray(response.data) ? 
-                response.data : 
-                response.data.journals || [];
-                
+            const journalsData = response.data.journals || [];
             const paginationData = response.data.pagination || {
                 currentPage: page,
                 totalPages: 1,
@@ -49,11 +50,25 @@ const JournalList = () => {
             setPagination(paginationData);
         } catch (err) {
             console.error('Fetch journals error:', err);
-            const errorMsg = err.response?.data?.message || 
-                          err.message || 
-                          'Failed to fetch journals';
+            let errorMsg = 'Failed to fetch journals';
+            
+            if (err.response) {
+                errorMsg = err.response.data?.message || 
+                         (err.response.status === 401 ? 'Please login to view journals' : 
+                         err.response.status === 404 ? 'Journal endpoint not found' : 
+                         'Server error occurred');
+            } else if (err.request) {
+                errorMsg = 'Network error - unable to reach server';
+            } else {
+                errorMsg = err.message || 'Error fetching journals';
+            }
+
             setError(errorMsg);
             toast.error(errorMsg);
+
+            if (err.response?.status === 401) {
+                navigate('/login');
+            }
         } finally {
             setLoading(false);
         }
@@ -61,7 +76,9 @@ const JournalList = () => {
 
     const handleDownload = async (id, fileType) => {
         try {
-            const response = await api.journals.download(id, fileType);
+            const response = await api.get(`/journals/${id}/download/${fileType}`, {
+                responseType: 'blob'
+            });
 
             const url = window.URL.createObjectURL(new Blob([response.data]));
             const link = document.createElement('a');

@@ -263,8 +263,8 @@ app.get('/health', (req, res) => {
 
 // Mount routes
 app.use('/auth', authRoutes);
-app.use('/journals', journalRoutes);
-app.use('/journals', journalDownloadRoutes);
+app.use('/api/journals', journalRoutes);
+app.use('/api/journals', journalDownloadRoutes);
 app.use('/submissions', submissionRoutes);
 app.use('/submissions', submissionDownloadRoutes);
 
