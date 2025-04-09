@@ -52,17 +52,36 @@ exports.uploadMiddleware = upload.single('file');
 // Upload and convert DOCX to PDF
 exports.uploadJournal = async (req, res) => {
     try {
-        const { title, abstract, authors, keywords } = req.body;
+        console.log('Upload journal request received');
+        console.log('Request body:', req.body);
+        console.log('Uploaded file:', req.file);
+        
+        const { title, abstract } = req.body;
         const file = req.file;
 
         if (!file) {
+            console.log('No file uploaded');
             return res.status(400).json({ message: "No file uploaded" });
         }
 
         // Validate required fields
         if (!title || !abstract) {
+            console.log('Missing required fields:', {title, abstract});
             return res.status(400).json({ message: "Title and abstract are required" });
         }
+
+        // Process authors and keywords from form data
+        const authors = Array.isArray(req.body.authors) ? 
+            req.body.authors : 
+            typeof req.body.authors === 'string' ? 
+                req.body.authors.split(',').map(a => a.trim()) : 
+                [];
+
+        const keywords = Array.isArray(req.body.keywords) ? 
+            req.body.keywords : 
+            typeof req.body.keywords === 'string' ? 
+                req.body.keywords.split(',').map(k => k.trim()) : 
+                [];
 
         const docxFilePath = file.path;
         const pdfFilePath = path.join(
@@ -70,59 +89,94 @@ exports.uploadJournal = async (req, res) => {
             `${path.basename(docxFilePath, '.docx')}.pdf`
         );
 
+        console.log('File paths:', {docxFilePath, pdfFilePath});
+
         // Convert DOCX to PDF
         let result;
         try {
-            result = await mammoth.extractRawText({ path: docxFilePath });
+            console.log('Starting DOCX conversion');
+            const docxBuffer = await fsPromises.readFile(docxFilePath);
+            result = await mammoth.extractRawText({ buffer: docxBuffer });
+            console.log('DOCX conversion successful');
         } catch (err) {
             console.error('DOCX conversion error:', err);
-            await fsPromises.unlink(docxFilePath); // Clean up uploaded file
-            return res.status(400).json({ message: "Invalid DOCX file format" });
+            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
+            return res.status(400).json({ 
+                message: "Invalid DOCX file format",
+                error: process.env.NODE_ENV === 'development' ? err.message : undefined
+            });
         }
 
         // Create PDF
-        await new Promise((resolve, reject) => {
-            const pdfDoc = new PDFDocument();
-            const stream = fs.createWriteStream(pdfFilePath);
-            pdfDoc.pipe(stream);
-            pdfDoc.text(result.value);
-            pdfDoc.end();
-            
-            stream.on('finish', resolve);
-            stream.on('error', reject);
-        });
+        try {
+            console.log('Creating PDF');
+            await new Promise((resolve, reject) => {
+                const pdfDoc = new PDFDocument();
+                const stream = fs.createWriteStream(pdfFilePath);
+                pdfDoc.pipe(stream);
+                pdfDoc.text(result.value);
+                pdfDoc.end();
+                
+                stream.on('finish', () => {
+                    console.log('PDF creation finished');
+                    resolve();
+                });
+                stream.on('error', (err) => {
+                    console.error('PDF stream error:', err);
+                    reject(err);
+                });
+            });
+        } catch (err) {
+            console.error('PDF creation error:', err);
+            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
+            return res.status(500).json({ message: "Failed to create PDF" });
+        }
 
         // Create journal record
-        const journal = new Journal({
-            title,
-            abstract,
-            authors: Array.isArray(authors) ? authors : [authors],
-            keywords: Array.isArray(keywords) ? keywords : keywords.split(',').map(k => k.trim()),
-            docxFilePath,
-            pdfFilePath,
-            status: "submitted"
-        });
+        try {
+            console.log('Creating journal record');
+            const journal = new Journal({
+                title,
+                abstract,
+                authors: Array.isArray(authors) ? authors : [authors],
+                keywords: Array.isArray(keywords) ? keywords : keywords.split(',').map(k => k.trim()),
+                docxFilePath,
+                pdfFilePath,
+                status: "submitted"
+            });
 
-        await journal.save();
+            await journal.save();
+            console.log('Journal saved successfully');
+        } catch (err) {
+            console.error('Journal save error:', err);
+            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
+            await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting pdf:', e));
+            return res.status(500).json({ message: "Failed to save journal" });
+        }
 
         res.status(201).json({
             message: "Journal uploaded successfully",
-            journal
+            journal: {
+                title: journal.title,
+                abstract: journal.abstract,
+                authors: journal.authors,
+                status: journal.status
+            }
         });
     } catch (error) {
         console.error('Upload error:', error);
         
         // Clean up files if they were created
         if (req.file?.path) {
-            try { await fsPromises.unlink(req.file.path); } catch (err) {}
+            await fsPromises.unlink(req.file.path).catch(e => console.error('Error deleting uploaded file:', e));
         }
-        if (pdfFilePath) {
-            try { await fsPromises.unlink(pdfFilePath); } catch (err) {}
+        if (typeof pdfFilePath !== 'undefined') {
+            await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting pdf file:', e));
         }
 
         res.status(500).json({ 
             message: "Failed to upload journal",
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };

@@ -1,10 +1,11 @@
 const express = require("express");
 const journalController = require("../controllers/journalController");
+const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Upload journal
-router.post("/", (req, res, next) => {
+// Upload journal (protected route)
+router.post("/", protect, (req, res, next) => {
     journalController.uploadMiddleware(req, res, (err) => {
         if (err) {
             if (err.code === 'LIMIT_FILE_SIZE') {
@@ -25,14 +26,14 @@ router.post("/", (req, res, next) => {
     });
 }, journalController.uploadJournal);
 
-// // Get all journals
-// router.get("/", journalController.getJournals);
+// Get all journals
+router.get("/", journalController.getJournals);
 
-// // Search journals
-// router.get("/search", journalController.searchJournals);
+// Search journals
+router.get("/search", journalController.searchJournals);
 
-// // Get journal by ID
-// router.get("/:id", journalController.getJournalById);
+// Get journal by ID
+router.get("/:id", journalController.getJournalById);
 
 // Update journal status
 router.patch("/:id/status", journalController.updateJournalStatus);
@@ -41,9 +42,3 @@ router.patch("/:id/status", journalController.updateJournalStatus);
 router.delete("/:id", journalController.deleteJournal);
 
 module.exports = router;
-
-
-// Public routes
-router.get("/", journalController.getJournals);
-router.get("/search", journalController.searchJournals);
-router.get("/:id", journalController.getJournalById);

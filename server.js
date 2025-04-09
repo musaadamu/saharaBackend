@@ -261,12 +261,12 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Mount routes
-app.use('/auth', authRoutes);
+// Mount routes with /api prefix
+app.use('/api/auth', authRoutes);
 app.use('/api/journals', journalRoutes);
 app.use('/api/journals', journalDownloadRoutes);
-app.use('/submissions', submissionRoutes);
-app.use('/submissions', submissionDownloadRoutes);
+app.use('/api/submissions', submissionRoutes);
+app.use('/api/submissions', submissionDownloadRoutes);
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

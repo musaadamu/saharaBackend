@@ -42,7 +42,7 @@ const JournalUpload = () => {
         formDataObj.append("title", formData.title);
         formDataObj.append("abstract", formData.abstract);
 
-        // Process authors as JSON string
+        // Process authors as array
         const authorNames = formData.authors
             .split(",")
             .map((name) => name.trim())
@@ -55,7 +55,7 @@ const JournalUpload = () => {
         }
         formDataObj.append("authors", JSON.stringify(authorNames));
 
-        // Process keywords as JSON string
+        // Process keywords as array
         const keywords = formData.keywords
             .split(",")
             .map((kw) => kw.trim())
@@ -68,7 +68,8 @@ const JournalUpload = () => {
             const response = await axios.post(`${API_BASE_URL}/journals`, formDataObj, {
                 headers: {
                     "Content-Type": "multipart/form-data",
-                },
+                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
+                }
             });
 
             if (!response.data) {
