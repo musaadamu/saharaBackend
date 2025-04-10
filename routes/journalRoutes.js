@@ -1,25 +1,24 @@
 const express = require("express");
 const journalController = require("../controllers/journalController");
-const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Upload journal (protected route)
-router.post("/", protect, (req, res, next) => {
+// Upload journal route (no authentication required)
+router.post("/", (req, res, next) => {
     journalController.uploadMiddleware(req, res, (err) => {
         if (err) {
             if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(413).json({ 
-                    message: 'File too large. Max size is 50MB' 
+                return res.status(413).json({
+                    message: 'File too large. Max size is 50MB'
                 });
             } else if (err.message.includes('Only .docx files are allowed')) {
-                return res.status(400).json({ 
-                    message: 'Invalid file type. Only .docx files are allowed' 
+                return res.status(400).json({
+                    message: 'Invalid file type. Only .docx files are allowed'
                 });
             }
-            return res.status(500).json({ 
-                message: 'File upload failed', 
-                error: err.message 
+            return res.status(500).json({
+                message: 'File upload failed',
+                error: err.message
             });
         }
         next();

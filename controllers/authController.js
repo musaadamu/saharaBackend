@@ -41,9 +41,9 @@ exports.register = async (req, res) => {
         // If there are validation errors, return them
         if (errors.length > 0) {
             console.error("Validation Errors:", errors);
-            return res.status(400).json({ 
-                message: "Validation Failed", 
-                errors 
+            return res.status(400).json({
+                message: "Validation Failed",
+                errors
             });
         }
 
@@ -54,11 +54,11 @@ exports.register = async (req, res) => {
         }
 
         try {
-            const user = await new User({ 
-                name, 
-                email, 
-                password, 
-                role: assignedRole 
+            const user = await new User({
+                name,
+                email,
+                password,
+                role: assignedRole
             }).save();
 
             const token = generateToken(user);
@@ -78,18 +78,18 @@ exports.register = async (req, res) => {
 
         } catch (saveError) {
             console.error("User Save Error:", saveError);
-            return res.status(400).json({ 
-                message: "Failed to save user", 
+            return res.status(400).json({
+                message: "Failed to save user",
                 error: saveError.message,
-                details: saveError.errors 
+                details: saveError.errors
             });
         }
 
     } catch (error) {
         console.error("Registration Error:", error);
-        res.status(500).json({ 
-            message: "Server error during registration", 
-            error: error.message 
+        res.status(500).json({
+            message: "Server error during registration",
+            error: error.message
         });
     }
 };
@@ -100,7 +100,7 @@ exports.login = async (req, res) => {
         // Preserve original password for comparison
         const email = req.body.email ? req.body.email.trim() : '';
         const password = req.body.password || ''; // Don't trim password for login
-        
+
         console.log("Login attempt for email:", email);
 
         const user = await User.findOne({ email });
@@ -111,10 +111,10 @@ exports.login = async (req, res) => {
         }
 
         console.log("✅ Found user:", user.email);
-        
+
         // Compare password with the hash stored in database
         const isPasswordValid = await bcrypt.compare(password, user.password);
-        
+
         if (!isPasswordValid) {
             console.log("❌ Password mismatch for user:", user.email);
             return res.status(401).json({ message: "Invalid email or password" });
@@ -159,7 +159,7 @@ exports.updateUser = async (req, res) => {
         const email = req.body.email ? req.body.email.trim() : null;
         const password = req.body.password || null; // Password will be hashed by pre-save hook
         const { role } = req.body;
-        const userId = req.params.id; 
+        const userId = req.params.id;
 
         let user = await User.findById(userId);
         if (!user) {
@@ -180,8 +180,8 @@ exports.updateUser = async (req, res) => {
         }
 
         await user.save();
-        res.json({ 
-            message: "User updated successfully", 
+        res.json({
+            message: "User updated successfully",
             user: { id: user._id, name: user.name, email: user.email, role: user.role }
         });
 
@@ -195,7 +195,7 @@ exports.updateUser = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
     try {
         const email = req.body.email ? req.body.email.trim() : '';
-        
+
         const user = await User.findOne({ email });
 
         if (!user) {
@@ -234,11 +234,11 @@ exports.resetPassword = async (req, res) => {
     try {
         const token = req.body.token ? req.body.token.trim() : '';
         const newPassword = req.body.newPassword || ''; // Don't trim password
-        
+
         if (!token || !newPassword) {
             return res.status(400).json({ message: "Token and new password are required" });
         }
-        
+
         // Find user with this token
         const user = await User.findOne({
             resetPasswordToken: token,
@@ -260,6 +260,40 @@ exports.resetPassword = async (req, res) => {
 
     } catch (error) {
         console.error("Reset Password Error:", error);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Get User Profile
+exports.getProfile = async (req, res) => {
+    try {
+        // The user ID comes from the protect middleware
+        const userId = req.user.id;
+
+        if (!userId) {
+            return res.status(401).json({ message: "Not authenticated" });
+        }
+
+        // Find user by ID but don't return the password
+        const user = await User.findById(userId).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Return user data
+        res.json({
+            success: true,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                createdAt: user.createdAt
+            }
+        });
+    } catch (error) {
+        console.error("Get Profile Error:", error);
         res.status(500).json({ message: "Server error" });
     }
 };

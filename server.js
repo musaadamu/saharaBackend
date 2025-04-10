@@ -60,7 +60,7 @@
 //         if (!origin) {
 //             return callback(null, true); // Allow server-to-server requests
 //         }
-        
+
 //         const isAllowed = allowedOrigins.some(allowedOrigin => {
 //             if (allowedOrigin.includes('*')) {
 //                 const pattern = new RegExp(allowedOrigin.replace('*', '.*'));
@@ -90,7 +90,7 @@
 
 // // Health check endpoint
 // app.get('/health', (req, res) => {
-//     res.status(200).json({ 
+//     res.status(200).json({
 //         status: 'ok',
 //         message: 'Server is running',
 //         environment: process.env.NODE_ENV || 'development'
@@ -121,10 +121,10 @@
 //             retryReads: true,
 //             maxPoolSize: 10,
 //         });
-        
+
 //         console.log('✅ MongoDB connected successfully');
 //         console.log(`MongoDB URI: ${process.env.MONGODB_URI.substring(0, 20)}...`);
-        
+
 //         app.listen(PORT, () => {
 //             console.log(`🚀 Server running on port ${PORT}`);
 //         console.log(`Backend URL: http://localhost:${PORT}`);
@@ -147,9 +147,9 @@
 // // Enhanced error handling
 // app.use((err, req, res, next) => {
 //     console.error(err.stack);
-    
+
 //     if (req.accepts('json')) {
-//         res.status(500).json({ 
+//         res.status(500).json({
 //             success: false,
 //             message: 'Server Error',
 //             error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error'
@@ -205,25 +205,30 @@ app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(morgan('dev'));
 
-// Handle multipart/form-data for file uploads
-const multer = require('multer');
-const upload = multer();
-app.use(upload.any());
+// We'll handle multipart/form-data in the specific routes that need it
+// Removing global multer middleware to avoid conflicts with route-specific multer configurations
 
 // CORS Configuration for development and production
 const allowedOrigins = [
-    'http://localhost:3000', // Local frontend development
-    'https://sahara-journal-frontend.vercel.app' // Production frontend
+    'http://localhost:3000',           // Local frontend development
+    'http://localhost:5173',           // Vite default port
+    'https://sahara-journal-frontend.vercel.app', // Production frontend
+    'https://sahara-journal.vercel.app'           // Alternative production frontend
 ].filter(Boolean);
 
 console.log('Allowed CORS origins:', allowedOrigins);
+
+// Log the current environment
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('Backend URL:', process.env.NODE_ENV === 'production' ? 'https://saharabackend-v190.onrender.com' : `http://localhost:${PORT}`);
+console.log('Frontend URL:', process.env.NODE_ENV === 'production' ? 'https://sahara-journal-frontend.vercel.app' : 'http://localhost:3000');
 
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin) {
             return callback(null, true); // Allow server-to-server requests
         }
-        
+
         const isAllowed = allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('*')) {
                 const pattern = new RegExp(allowedOrigin.replace('*', '.*'));
@@ -254,7 +259,7 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-    res.status(200).json({ 
+    res.status(200).json({
         status: 'ok',
         message: 'Server is running',
         environment: process.env.NODE_ENV || 'development'
@@ -262,7 +267,7 @@ app.get('/health', (req, res) => {
 });
 
 // Mount routes with /api prefix
-app.use('/api/auth', authRoutes);
+app.use('/', authRoutes);
 app.use('/api/journals', journalRoutes);
 app.use('/api/journals', journalDownloadRoutes);
 app.use('/api/submissions', submissionRoutes);
@@ -270,6 +275,28 @@ app.use('/api/submissions', submissionDownloadRoutes);
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Add a route to check file existence and paths
+app.get('/check-file/:filename', (req, res) => {
+    const filename = req.params.filename;
+    const filePath = path.join(__dirname, 'uploads', 'journals', filename);
+
+    fs.access(filePath, fs.constants.F_OK, (err) => {
+        if (err) {
+            return res.status(404).json({
+                exists: false,
+                requestedPath: filePath,
+                error: err.message
+            });
+        }
+
+        res.json({
+            exists: true,
+            path: filePath,
+            url: `/uploads/journals/${filename}`
+        });
+    });
+});
 
 // Improved MongoDB Connection
 const connectDB = async () => {
@@ -285,10 +312,10 @@ const connectDB = async () => {
             retryReads: true,
             maxPoolSize: 10,
         });
-        
+
         console.log('✅ MongoDB connected successfully');
         console.log(`MongoDB URI: ${process.env.MONGODB_URI.substring(0, 20)}...`);
-        
+
         app.listen(PORT, () => {
             console.log(`🚀 Server running on port ${PORT}`);
             console.log(`Backend URL: http://localhost:${PORT}`);
@@ -311,9 +338,9 @@ process.on('SIGINT', () => {
 // Enhanced error handling
 app.use((err, req, res, next) => {
     console.error(err.stack);
-    
+
     if (req.accepts('json')) {
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
             message: 'Server Error',
             error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error'

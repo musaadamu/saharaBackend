@@ -9,11 +9,15 @@ const PDFDocument = require("pdfkit");
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
-        const uploadDir = "uploads/journals";
+        const uploadDir = process.env.DOCUMENT_STORAGE_PATH || "uploads/journals";
+        console.log('Upload directory:', uploadDir);
         try {
+            // Create the directory with recursive option to create parent directories if they don't exist
             await fsPromises.mkdir(uploadDir, { recursive: true });
+            console.log('Upload directory created or already exists');
             cb(null, uploadDir);
         } catch (error) {
+            console.error('Error creating upload directory:', error);
             cb(error, null);
         }
     },
@@ -23,24 +27,48 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    const extname = path.extname(file.originalname).toLowerCase();
-    const mimetype = file.mimetype;
-    const isDocx = extname === '.docx' && 
-        (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
-         mimetype === 'application/docx' ||
-         mimetype === 'application/vnd.ms-word');
+    try {
+        console.log('Filtering file:', file.originalname, file.mimetype);
+        const extname = path.extname(file.originalname).toLowerCase();
+        const mimetype = file.mimetype;
+        const isDocx = extname === '.docx' &&
+            (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+             mimetype === 'application/docx' ||
+             mimetype === 'application/vnd.ms-word');
 
-    if (isDocx) {
-        cb(null, true);
-    } else {
-        cb(new Error('Only .docx files are allowed!'), false);
+        if (isDocx) {
+            console.log('File accepted:', file.originalname);
+            cb(null, true);
+        } else {
+            console.log('File rejected:', file.originalname, 'Mimetype:', mimetype, 'Extension:', extname);
+            cb(new Error('Only .docx files are allowed!'), false);
+        }
+    } catch (error) {
+        console.error('Error in file filter:', error);
+        cb(error, false);
     }
 };
 
-const upload = multer({ 
-    storage, 
+// Create uploads directory if it doesn't exist
+const ensureUploadsDir = async () => {
+    const uploadDir = process.env.DOCUMENT_STORAGE_PATH || "uploads/journals";
+    try {
+        await fsPromises.mkdir(uploadDir, { recursive: true });
+        console.log(`Ensured upload directory exists: ${uploadDir}`);
+        return true;
+    } catch (error) {
+        console.error(`Failed to create upload directory: ${uploadDir}`, error);
+        return false;
+    }
+};
+
+// Call this function to ensure the directory exists
+ensureUploadsDir();
+
+const upload = multer({
+    storage,
     fileFilter,
-    limits: { 
+    limits: {
         fileSize: 50 * 1024 * 1024,
         files: 1,
         parts: 50
@@ -54,8 +82,19 @@ exports.uploadJournal = async (req, res) => {
     try {
         console.log('Upload journal request received');
         console.log('Request body:', req.body);
-        console.log('Uploaded file:', req.file);
-        
+        console.log('Uploaded file:', req.file ? 'File received' : 'No file received');
+        if (req.file) {
+            console.log('File details:', {
+                filename: req.file.filename,
+                originalname: req.file.originalname,
+                mimetype: req.file.mimetype,
+                size: req.file.size,
+                path: req.file.path
+            });
+        }
+        console.log('Storage path:', process.env.DOCUMENT_STORAGE_PATH);
+        console.log('Current directory:', __dirname);
+
         const { title, abstract } = req.body;
         const file = req.file;
 
@@ -71,75 +110,88 @@ exports.uploadJournal = async (req, res) => {
         }
 
         // Process authors and keywords from form data
-        const authors = Array.isArray(req.body.authors) ? 
-            req.body.authors : 
-            typeof req.body.authors === 'string' ? 
-                req.body.authors.split(',').map(a => a.trim()) : 
-                [];
+        console.log('Processing authors:', req.body.authors);
+        let authors = [];
+        try {
+            if (Array.isArray(req.body.authors)) {
+                authors = req.body.authors;
+            } else if (typeof req.body.authors === 'string') {
+                // Check if it's a JSON string
+                if (req.body.authors.startsWith('[') && req.body.authors.endsWith(']')) {
+                    try {
+                        authors = JSON.parse(req.body.authors);
+                    } catch (e) {
+                        // If parsing fails, treat as comma-separated string
+                        authors = req.body.authors.split(',').map(a => a.trim());
+                    }
+                } else {
+                    // Treat as comma-separated string
+                    authors = req.body.authors.split(',').map(a => a.trim());
+                }
+            }
+        } catch (e) {
+            console.error('Error processing authors:', e);
+            authors = [];
+        }
+        console.log('Processed authors:', authors);
 
-        const keywords = Array.isArray(req.body.keywords) ? 
-            req.body.keywords : 
-            typeof req.body.keywords === 'string' ? 
-                req.body.keywords.split(',').map(k => k.trim()) : 
-                [];
+        console.log('Processing keywords:', req.body.keywords);
+        let keywords = [];
+        try {
+            if (Array.isArray(req.body.keywords)) {
+                keywords = req.body.keywords;
+            } else if (typeof req.body.keywords === 'string') {
+                // Check if it's a JSON string
+                if (req.body.keywords.startsWith('[') && req.body.keywords.endsWith(']')) {
+                    try {
+                        keywords = JSON.parse(req.body.keywords);
+                    } catch (e) {
+                        // If parsing fails, treat as comma-separated string
+                        keywords = req.body.keywords.split(',').map(k => k.trim());
+                    }
+                } else {
+                    // Treat as comma-separated string
+                    keywords = req.body.keywords.split(',').map(k => k.trim());
+                }
+            }
+        } catch (e) {
+            console.error('Error processing keywords:', e);
+            keywords = [];
+        }
+        console.log('Processed keywords:', keywords);
 
         const docxFilePath = file.path;
-        const pdfFilePath = path.join(
-            path.dirname(docxFilePath), 
-            `${path.basename(docxFilePath, '.docx')}.pdf`
-        );
+        // Create a simple PDF path without conversion
+        const pdfFilePath = docxFilePath + '.pdf';
 
         console.log('File paths:', {docxFilePath, pdfFilePath});
 
-        // Convert DOCX to PDF
-        let result;
-        try {
-            console.log('Starting DOCX conversion');
-            const docxBuffer = await fsPromises.readFile(docxFilePath);
-            result = await mammoth.extractRawText({ buffer: docxBuffer });
-            console.log('DOCX conversion successful');
-        } catch (err) {
-            console.error('DOCX conversion error:', err);
-            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
-            return res.status(400).json({ 
-                message: "Invalid DOCX file format",
-                error: process.env.NODE_ENV === 'development' ? err.message : undefined
-            });
-        }
-
-        // Create PDF
-        try {
-            console.log('Creating PDF');
-            await new Promise((resolve, reject) => {
-                const pdfDoc = new PDFDocument();
-                const stream = fs.createWriteStream(pdfFilePath);
-                pdfDoc.pipe(stream);
-                pdfDoc.text(result.value);
-                pdfDoc.end();
-                
-                stream.on('finish', () => {
-                    console.log('PDF creation finished');
-                    resolve();
-                });
-                stream.on('error', (err) => {
-                    console.error('PDF stream error:', err);
-                    reject(err);
-                });
-            });
-        } catch (err) {
-            console.error('PDF creation error:', err);
-            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
-            return res.status(500).json({ message: "Failed to create PDF" });
-        }
+        // Skip DOCX to PDF conversion for now to simplify the process
+        // We'll just save the journal with the DOCX file path
+        console.log('Skipping DOCX to PDF conversion for debugging');
 
         // Create journal record
+        let journal;
         try {
             console.log('Creating journal record');
-            const journal = new Journal({
+            // Ensure authors and keywords are arrays
+            const authorArray = Array.isArray(authors) ? authors : (authors ? [authors] : []);
+            const keywordArray = Array.isArray(keywords) ? keywords : (keywords ? [keywords] : []);
+
+            console.log('Creating journal with:', {
                 title,
                 abstract,
-                authors: Array.isArray(authors) ? authors : [authors],
-                keywords: Array.isArray(keywords) ? keywords : keywords.split(',').map(k => k.trim()),
+                authors: authorArray,
+                keywords: keywordArray,
+                docxFilePath,
+                pdfFilePath
+            });
+
+            journal = new Journal({
+                title,
+                abstract,
+                authors: authorArray,
+                keywords: keywordArray,
                 docxFilePath,
                 pdfFilePath,
                 status: "submitted"
@@ -147,34 +199,44 @@ exports.uploadJournal = async (req, res) => {
 
             await journal.save();
             console.log('Journal saved successfully');
+
+            // Send response after successful save
+            return res.status(201).json({
+                message: "Journal uploaded successfully",
+                journal: {
+                    title: journal.title,
+                    abstract: journal.abstract,
+                    authors: journal.authors,
+                    status: journal.status
+                }
+            });
         } catch (err) {
             console.error('Journal save error:', err);
             await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
             await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting pdf:', e));
             return res.status(500).json({ message: "Failed to save journal" });
         }
-
-        res.status(201).json({
-            message: "Journal uploaded successfully",
-            journal: {
-                title: journal.title,
-                abstract: journal.abstract,
-                authors: journal.authors,
-                status: journal.status
-            }
-        });
     } catch (error) {
         console.error('Upload error:', error);
-        
+        console.error('Error stack:', error.stack);
+        console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+
+        // Log request information
+        console.log('Request body:', req.body);
+        console.log('Request file:', req.file);
+        console.log('Request headers:', req.headers);
+
         // Clean up files if they were created
         if (req.file?.path) {
+            console.log('Cleaning up uploaded file:', req.file.path);
             await fsPromises.unlink(req.file.path).catch(e => console.error('Error deleting uploaded file:', e));
         }
         if (typeof pdfFilePath !== 'undefined') {
+            console.log('Cleaning up PDF file:', pdfFilePath);
             await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting pdf file:', e));
         }
 
-        res.status(500).json({ 
+        return res.status(500).json({
             message: "Failed to upload journal",
             error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
@@ -187,9 +249,9 @@ exports.getJournals = async (req, res) => {
         const journals = await Journal.find().sort({ createdAt: -1 });
         res.json(journals);
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to get journals", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to get journals",
+            error: error.message
         });
     }
 };
@@ -203,9 +265,9 @@ exports.getJournalById = async (req, res) => {
         }
         res.json(journal);
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to get journal", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to get journal",
+            error: error.message
         });
     }
 };
@@ -224,9 +286,9 @@ exports.updateJournalStatus = async (req, res) => {
         }
         res.json(journal);
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to update journal status", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to update journal status",
+            error: error.message
         });
     }
 };
@@ -238,7 +300,7 @@ exports.deleteJournal = async (req, res) => {
         if (!journal) {
             return res.status(404).json({ message: "Journal not found" });
         }
-        
+
         // Delete associated files
         try {
             await fsPromises.unlink(journal.docxFilePath);
@@ -249,9 +311,9 @@ exports.deleteJournal = async (req, res) => {
 
         res.json({ message: "Journal deleted successfully" });
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to delete journal", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to delete journal",
+            error: error.message
         });
     }
 };
@@ -274,9 +336,9 @@ exports.searchJournals = async (req, res) => {
 
         res.json(journals);
     } catch (error) {
-        res.status(500).json({ 
-            message: "Search failed", 
-            error: error.message 
+        res.status(500).json({
+            message: "Search failed",
+            error: error.message
         });
     }
 };
