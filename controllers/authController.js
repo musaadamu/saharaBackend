@@ -34,9 +34,9 @@ exports.register = async (req, res) => {
         if (!password) errors.push("Password is required");
         if (password && password.length < 6) errors.push("Password must be at least 6 characters long");
 
-        // Validate role
-        const allowedRoles = ["author", "editor", "admin"];
-        const assignedRole = allowedRoles.includes(role) ? role : "author";
+        // For security, only allow 'author' role during registration
+        // Admin roles can only be assigned by existing admins
+        const assignedRole = "author";
 
         // If there are validation errors, return them
         if (errors.length > 0) {
@@ -188,6 +188,48 @@ exports.updateUser = async (req, res) => {
     } catch (error) {
         console.error("Update Error:", error);
         res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Create Admin User (Only accessible by existing admins)
+exports.createAdmin = async (req, res) => {
+    try {
+        // Check if the requesting user is an admin
+        if (req.user.role !== "admin") {
+            return res.status(403).json({ message: "Access denied. Only admins can create admin accounts." });
+        }
+
+        const { name, email, password } = req.body;
+
+        // Validate inputs
+        if (!name || !email || !password) {
+            return res.status(400).json({ message: "All fields are required" });
+        }
+
+        // Check if user already exists
+        if (await User.findOne({ email })) {
+            return res.status(400).json({ message: "Email already registered" });
+        }
+
+        // Create the admin user
+        const user = await new User({
+            name,
+            email,
+            password,
+            role: "admin"
+        }).save();
+
+        res.status(201).json({
+            message: "Admin user created successfully",
+            user: { id: user._id, name: user.name, email: user.email, role: user.role }
+        });
+
+    } catch (error) {
+        console.error("Admin Creation Error:", error);
+        res.status(500).json({
+            message: "Server error during admin creation",
+            error: error.message
+        });
     }
 };
 

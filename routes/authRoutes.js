@@ -12,8 +12,8 @@
 // module.exports = router;
 
 const express = require('express');
-const { register, login, logout, forgotPassword, updateUser, getProfile } = require('../controllers/authController');
-const { protect } = require('../middleware/authMiddleware');
+const { register, login, logout, forgotPassword, updateUser, getProfile, createAdmin } = require('../controllers/authController');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 const router = express.Router();
 
 router.post('/register', register);
@@ -22,5 +22,6 @@ router.post('/logout', protect, logout);
 router.post('/forgot-password', forgotPassword);
 router.put('/profile', protect, updateUser); // Route for updating user
 router.get('/profile', protect, getProfile); // Route for getting user profile
+router.post('/create-admin', protect, adminOnly, createAdmin); // Route for creating admin users (admin only)
 
 module.exports = router;
