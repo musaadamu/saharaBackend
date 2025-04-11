@@ -270,16 +270,69 @@ app.get('/health', (req, res) => {
 app.use('/', authRoutes);
 app.use('/api/journals', journalRoutes);
 app.use('/api/journals', journalDownloadRoutes);
+
+// Handle both /api/submissions and /api/api/submissions for backward compatibility
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/submissions', submissionDownloadRoutes);
+app.use('/api/api/submissions', submissionRoutes);
+app.use('/api/api/submissions', submissionDownloadRoutes);
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Handle the environment variable path correctly
+let uploadsPath;
+if (process.env.DOCUMENT_STORAGE_PATH) {
+    // If it's a relative path starting with '../', resolve it relative to the current directory
+    if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+        // Remove the '../' prefix to get the correct path for static serving
+        const staticPath = process.env.DOCUMENT_STORAGE_PATH.replace(/^\.\.\//, '');
+        uploadsPath = path.resolve(path.join(__dirname, '..', staticPath));
+    } else {
+        // Otherwise, use it as is or resolve it if it's a relative path
+        uploadsPath = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+    }
+} else {
+    // Fallback to a default path
+    uploadsPath = path.resolve(path.join(__dirname, 'uploads'));
+}
+console.log('Static files path (absolute):', uploadsPath);
+app.use('/uploads', express.static(uploadsPath));
+
+// Also serve the parent directory of uploads to handle the case where DOCUMENT_STORAGE_PATH is '../uploads/journals'
+const parentUploadsPath = path.resolve(path.join(__dirname, '..', 'uploads'));
+console.log('Parent uploads path (absolute):', parentUploadsPath);
+app.use('/uploads', express.static(parentUploadsPath));
+
+// Ensure submissions directory is also served
+const submissionsPath = path.resolve(path.join(__dirname, 'uploads', 'submissions'));
+console.log('Submissions path (absolute):', submissionsPath);
+app.use('/uploads/submissions', express.static(submissionsPath));
+
+// Also serve the parent submissions directory
+const parentSubmissionsPath = path.resolve(path.join(__dirname, '..', 'uploads', 'submissions'));
+console.log('Parent submissions path (absolute):', parentSubmissionsPath);
+app.use('/uploads/submissions', express.static(parentSubmissionsPath));
 
 // Add a route to check file existence and paths
 app.get('/check-file/:filename', (req, res) => {
     const filename = req.params.filename;
-    const filePath = path.join(__dirname, 'uploads', 'journals', filename);
+
+    // Handle the environment variable path correctly
+    let uploadsDir;
+    if (process.env.DOCUMENT_STORAGE_PATH) {
+        // If it's a relative path starting with '../', resolve it relative to the current directory
+        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+            uploadsDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+        } else {
+            // Otherwise, use it as is or resolve it if it's a relative path
+            uploadsDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+        }
+    } else {
+        // Fallback to a default path
+        uploadsDir = path.resolve(path.join(__dirname, 'uploads', 'journals'));
+    }
+
+    const filePath = path.join(uploadsDir, filename);
+    console.log('Checking file existence at:', filePath);
 
     fs.access(filePath, fs.constants.F_OK, (err) => {
         if (err) {
@@ -295,6 +348,343 @@ app.get('/check-file/:filename', (req, res) => {
             path: filePath,
             url: `/uploads/journals/${filename}`
         });
+    });
+});
+
+// Add a direct file serving route for journals
+app.get('/direct-file/:type/:filename', (req, res) => {
+    const { type, filename } = req.params;
+
+    // Try multiple possible locations for the file
+    const possiblePaths = [];
+
+    if (type === 'journals') {
+        // Try different possible locations
+        possiblePaths.push(
+            path.resolve(path.join(__dirname, '..', 'uploads', 'journals', filename)),
+            path.resolve(path.join(__dirname, 'uploads', 'journals', filename)),
+            path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', filename))
+        );
+
+        // Also check if there's a DOCUMENT_STORAGE_PATH environment variable
+        if (process.env.DOCUMENT_STORAGE_PATH) {
+            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                const storagePath = process.env.DOCUMENT_STORAGE_PATH.replace(/^\.\.\//,'');
+                possiblePaths.push(
+                    path.resolve(path.join(__dirname, '..', storagePath, filename)),
+                    path.resolve(path.join(__dirname, '..', '..', storagePath, filename))
+                );
+            } else {
+                possiblePaths.push(
+                    path.resolve(path.join(process.env.DOCUMENT_STORAGE_PATH, filename))
+                );
+            }
+        }
+    } else if (type === 'submissions') {
+        // Try different possible locations for submissions
+        possiblePaths.push(
+            path.resolve(path.join(__dirname, '..', 'uploads', 'submissions', filename)),
+            path.resolve(path.join(__dirname, 'uploads', 'submissions', filename)),
+            path.resolve(path.join(__dirname, '..', '..', 'uploads', 'submissions', filename))
+        );
+    } else {
+        return res.status(400).json({ message: 'Invalid file type' });
+    }
+
+    console.log('Trying to find file in these locations:', possiblePaths);
+
+    // Try each path until we find the file
+    let filePath = null;
+    for (const path of possiblePaths) {
+        if (fs.existsSync(path)) {
+            filePath = path;
+            console.log('File found at:', filePath);
+            break;
+        }
+    }
+
+    // If no file was found in any location
+    if (!filePath) {
+        console.error('File not found in any location:', filename);
+        return res.status(404).json({ message: 'File not found' });
+    }
+
+    // Determine content type based on file extension
+    const ext = path.extname(filename).toLowerCase();
+    let contentType = 'application/octet-stream';
+
+    if (ext === '.pdf') {
+        contentType = 'application/pdf';
+    } else if (ext === '.docx') {
+        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+
+    // Set headers and send the file
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    // Stream the file to the response
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+});
+
+// Add a route to copy a file to the correct location
+app.get('/fix-file/:type/:filename', async (req, res) => {
+    const { type, filename } = req.params;
+    const results = [];
+
+    // Define source directories to search
+    const dirsToSearch = [
+        path.resolve(path.join(__dirname, '..', 'uploads', type)),
+        path.resolve(path.join(__dirname, 'uploads', type)),
+        path.resolve(path.join(__dirname, '..', '..', 'uploads', type)),
+        path.resolve(path.join(__dirname, '..', 'uploads')),
+        path.resolve(path.join(__dirname, 'uploads')),
+        path.resolve(path.join(__dirname, '..', '..', 'uploads'))
+    ];
+
+    // Add DOCUMENT_STORAGE_PATH if it exists
+    if (process.env.DOCUMENT_STORAGE_PATH) {
+        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+            const storagePath = process.env.DOCUMENT_STORAGE_PATH.replace(/^\.\.\//,'');
+            dirsToSearch.push(
+                path.resolve(path.join(__dirname, '..', storagePath)),
+                path.resolve(path.join(__dirname, '..', '..', storagePath))
+            );
+        } else {
+            dirsToSearch.push(
+                path.resolve(process.env.DOCUMENT_STORAGE_PATH)
+            );
+        }
+    }
+
+    // Define target directory
+    const targetDir = path.resolve(path.join(__dirname, '..', 'uploads', type));
+    const targetPath = path.join(targetDir, filename);
+
+    console.log('Target directory:', targetDir);
+    console.log('Target path:', targetPath);
+
+    // Create target directory if it doesn't exist
+    try {
+        await fs.promises.mkdir(targetDir, { recursive: true });
+        console.log('Target directory created or already exists');
+    } catch (err) {
+        console.error('Error creating target directory:', err);
+        return res.status(500).json({ error: 'Failed to create target directory' });
+    }
+
+    // Function to search a directory recursively
+    const searchDir = async (dir) => {
+        try {
+            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+
+                if (entry.isDirectory()) {
+                    // Recursively search subdirectories
+                    await searchDir(fullPath);
+                } else if (entry.name.includes(filename)) {
+                    // Found a matching file
+                    results.push({
+                        path: fullPath,
+                        name: entry.name,
+                        size: (await fs.promises.stat(fullPath)).size
+                    });
+                }
+            }
+        } catch (err) {
+            console.error(`Error searching directory ${dir}:`, err);
+        }
+    };
+
+    // Search all directories
+    for (const dir of dirsToSearch) {
+        try {
+            if (fs.existsSync(dir)) {
+                await searchDir(dir);
+            }
+        } catch (err) {
+            console.error(`Error accessing directory ${dir}:`, err);
+        }
+    }
+
+    // If no files found
+    if (results.length === 0) {
+        return res.json({
+            success: false,
+            message: 'No matching files found',
+            searchedDirectories: dirsToSearch
+        });
+    }
+
+    // Copy the first matching file to the target location
+    try {
+        const sourceFile = results[0].path;
+        console.log(`Copying file from ${sourceFile} to ${targetPath}`);
+
+        // Read the source file
+        const fileContent = await fs.promises.readFile(sourceFile);
+
+        // Write to the target location
+        await fs.promises.writeFile(targetPath, fileContent);
+
+        return res.json({
+            success: true,
+            message: 'File copied successfully',
+            source: sourceFile,
+            target: targetPath,
+            allMatches: results
+        });
+    } catch (err) {
+        console.error('Error copying file:', err);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to copy file',
+            message: err.message
+        });
+    }
+});
+
+// Add a route to find a specific file
+app.get('/find-file/:filename', async (req, res) => {
+    const { filename } = req.params;
+    const results = [];
+
+    // Define directories to search
+    const dirsToSearch = [
+        path.resolve(path.join(__dirname, '..', 'uploads', 'journals')),
+        path.resolve(path.join(__dirname, 'uploads', 'journals')),
+        path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals')),
+        path.resolve(path.join(__dirname, '..', 'uploads')),
+        path.resolve(path.join(__dirname, 'uploads')),
+        path.resolve(path.join(__dirname, '..', '..', 'uploads'))
+    ];
+
+    // Add DOCUMENT_STORAGE_PATH if it exists
+    if (process.env.DOCUMENT_STORAGE_PATH) {
+        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+            const storagePath = process.env.DOCUMENT_STORAGE_PATH.replace(/^\.\.\//,'');
+            dirsToSearch.push(
+                path.resolve(path.join(__dirname, '..', storagePath)),
+                path.resolve(path.join(__dirname, '..', '..', storagePath))
+            );
+        } else {
+            dirsToSearch.push(
+                path.resolve(process.env.DOCUMENT_STORAGE_PATH)
+            );
+        }
+    }
+
+    console.log('Searching for file in these directories:', dirsToSearch);
+
+    // Function to search a directory recursively
+    const searchDir = async (dir) => {
+        try {
+            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+
+                if (entry.isDirectory()) {
+                    // Recursively search subdirectories
+                    await searchDir(fullPath);
+                } else if (entry.name.includes(filename)) {
+                    // Found a matching file
+                    results.push({
+                        path: fullPath,
+                        name: entry.name,
+                        size: (await fs.promises.stat(fullPath)).size
+                    });
+                }
+            }
+        } catch (err) {
+            console.error(`Error searching directory ${dir}:`, err);
+        }
+    };
+
+    // Search all directories
+    for (const dir of dirsToSearch) {
+        try {
+            if (fs.existsSync(dir)) {
+                await searchDir(dir);
+            }
+        } catch (err) {
+            console.error(`Error accessing directory ${dir}:`, err);
+        }
+    }
+
+    res.json({
+        filename,
+        searchedDirectories: dirsToSearch,
+        results
+    });
+});
+
+// Add a route to list all files in the uploads directory
+app.get('/list-files', (req, res) => {
+    // Handle the environment variable path correctly
+    let uploadsDir;
+    if (process.env.DOCUMENT_STORAGE_PATH) {
+        // If it's a relative path starting with '../', resolve it relative to the current directory
+        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+            uploadsDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+        } else {
+            // Otherwise, use it as is or resolve it if it's a relative path
+            uploadsDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+        }
+    } else {
+        // Fallback to a default path
+        uploadsDir = path.resolve(path.join(__dirname, 'uploads', 'journals'));
+    }
+
+    console.log('Listing files in directory:', uploadsDir);
+
+    // Also check the parent directory if using relative path
+    const parentUploadsDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+    console.log('Also checking parent directory:', parentUploadsDir);
+
+    // Check both directories
+    const checkDirectory = (dir, callback) => {
+        fs.readdir(dir, (err, files) => {
+            if (err) {
+                console.error(`Error reading directory ${dir}:`, err);
+                callback([], dir);
+            } else {
+                callback(files, dir);
+            }
+        });
+    };
+
+    // Check the main directory
+    checkDirectory(uploadsDir, (mainFiles, mainDir) => {
+        // Check the parent directory if different
+        if (uploadsDir !== parentUploadsDir) {
+            checkDirectory(parentUploadsDir, (parentFiles, parentDir) => {
+                res.json({
+                    directories: [
+                        {
+                            directory: mainDir,
+                            files: mainFiles
+                        },
+                        {
+                            directory: parentDir,
+                            files: parentFiles
+                        }
+                    ]
+                });
+            });
+        } else {
+            res.json({
+                directories: [
+                    {
+                        directory: mainDir,
+                        files: mainFiles
+                    }
+                ]
+            });
+        }
     });
 });
 

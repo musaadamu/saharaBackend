@@ -10,16 +10,36 @@ const mongoose = require("mongoose");
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
-        const uploadDir = "uploads/submissions";
+        // Use absolute path to avoid path resolution issues
+        let uploadDir;
+        if (process.env.DOCUMENT_STORAGE_PATH) {
+            // If it's a relative path starting with '../', resolve it relative to the current directory
+            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH.replace('journals', 'submissions')));
+            } else {
+                // Otherwise, use it as is or resolve it if it's a relative path
+                uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH.replace('journals', 'submissions'));
+            }
+        } else {
+            // Fallback to a default path
+            uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'submissions'));
+        }
+
+        console.log('Submission upload directory (absolute):', uploadDir);
+
         try {
             await fsPromises.mkdir(uploadDir, { recursive: true });
+            console.log('Submission upload directory created or already exists');
             cb(null, uploadDir);
         } catch (error) {
+            console.error('Error creating submission upload directory:', error);
             cb(error, null);
         }
     },
     filename: (req, file, cb) => {
-        cb(null, `${Date.now()}-${file.originalname}`);
+        const filename = `${Date.now()}-${file.originalname}`;
+        console.log('Generated filename for upload:', filename);
+        cb(null, filename);
     },
 });
 
@@ -27,8 +47,8 @@ const storage = multer.diskStorage({
 const fileFilter = (req, file, cb) => {
     const extname = path.extname(file.originalname).toLowerCase();
     const mimetype = file.mimetype;
-    const isDocx = extname === '.docx' && 
-        (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+    const isDocx = extname === '.docx' &&
+        (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
          mimetype === 'application/docx' ||
          mimetype === 'application/vnd.ms-word');
 
@@ -39,12 +59,12 @@ const fileFilter = (req, file, cb) => {
     }
 };
 
-const upload = multer({ 
-    storage, 
+const upload = multer({
+    storage,
     fileFilter,
-    limits: { 
+    limits: {
         fileSize: 50 * 1024 * 1024 // 50MB file size limit
-    } 
+    }
 });
 
 // Validation function
@@ -52,111 +72,278 @@ const validateSubmissionInput = (req) => {
     const { title, abstract, authors, keywords } = req.body;
     const errors = [];
 
+    console.log('Validating submission input:');
+    console.log('- title:', title);
+    console.log('- abstract:', abstract);
+    console.log('- authors:', authors);
+    console.log('- keywords:', keywords);
+    console.log('- file:', req.file);
+
     if (!title || (typeof title === 'string' && title.trim() === '')) {
         errors.push('Title is required');
     }
-    
+
     if (!abstract || (typeof abstract === 'string' && abstract.trim() === '')) {
         errors.push('Abstract is required');
     }
-    
-    if (!authors || (Array.isArray(authors) && authors.length === 0) || (!Array.isArray(authors) && !authors)) {
+
+    // Handle authors which might be a string, array, or JSON string
+    let authorsValid = false;
+    if (authors) {
+        if (Array.isArray(authors) && authors.length > 0) {
+            authorsValid = true;
+        } else if (typeof authors === 'string') {
+            if (authors.trim() !== '') {
+                // If it's a comma-separated string
+                if (authors.includes(',')) {
+                    authorsValid = true;
+                } else if (authors.startsWith('[') && authors.endsWith(']')) {
+                    // If it's a JSON string array
+                    try {
+                        const parsed = JSON.parse(authors);
+                        authorsValid = Array.isArray(parsed) && parsed.length > 0;
+                    } catch (e) {
+                        // Not valid JSON, but still a non-empty string
+                        authorsValid = true;
+                    }
+                } else {
+                    // Single author as string
+                    authorsValid = true;
+                }
+            }
+        }
+    }
+
+    if (!authorsValid) {
         errors.push('At least one author is required');
     }
-    
-    if (!keywords || 
-        (Array.isArray(keywords) && keywords.length === 0) || 
-        (typeof keywords === 'string' && keywords.trim() === '')) {
+
+    // Handle keywords which might be a string, array, or JSON string
+    let keywordsValid = false;
+    if (keywords) {
+        if (Array.isArray(keywords) && keywords.length > 0) {
+            keywordsValid = true;
+        } else if (typeof keywords === 'string') {
+            if (keywords.trim() !== '') {
+                // If it's a comma-separated string
+                if (keywords.includes(',')) {
+                    keywordsValid = true;
+                } else if (keywords.startsWith('[') && keywords.endsWith(']')) {
+                    // If it's a JSON string array
+                    try {
+                        const parsed = JSON.parse(keywords);
+                        keywordsValid = Array.isArray(parsed) && parsed.length > 0;
+                    } catch (e) {
+                        // Not valid JSON, but still a non-empty string
+                        keywordsValid = true;
+                    }
+                } else {
+                    // Single keyword as string
+                    keywordsValid = true;
+                }
+            }
+        }
+    }
+
+    if (!keywordsValid) {
         errors.push('Keywords are required');
     }
-    
+
     if (!req.file) {
         errors.push('DOCX file is required');
         console.error('No file uploaded. Received fields:', Object.keys(req.body));
     }
 
+    if (errors.length > 0) {
+        console.log('Validation errors:', errors);
+    }
+
     return errors;
 };
 
-// Upload and convert DOCX to PDF
+// Upload and convert DOCX to PDF - follow the same approach as journalController
 exports.uploadSubmission = async (req, res) => {
     try {
-        const validationErrors = validateSubmissionInput(req);
-        if (validationErrors.length > 0) {
-            if (req.file) {
-                await fsPromises.unlink(req.file.path).catch(() => {});
-            }
-            return res.status(400).json({ 
-                message: "Validation Failed", 
-                errors: validationErrors 
+        console.log('Upload submission request received');
+        console.log('Request body:', req.body);
+        console.log('Uploaded file:', req.file ? 'File received' : 'No file received');
+        if (req.file) {
+            console.log('File details:', {
+                filename: req.file.filename,
+                originalname: req.file.originalname,
+                mimetype: req.file.mimetype,
+                size: req.file.size,
+                path: req.file.path
             });
         }
+        console.log('Storage path:', process.env.DOCUMENT_STORAGE_PATH);
+        console.log('Current directory:', __dirname);
 
-        const { title, abstract, authors, keywords } = req.body;
+        const { title, abstract } = req.body;
         const file = req.file;
+
+        if (!file) {
+            console.log('No file uploaded');
+            return res.status(400).json({ message: "No file uploaded" });
+        }
+
+        // Validate required fields
+        if (!title || !abstract) {
+            console.log('Missing required fields:', {title, abstract});
+            return res.status(400).json({ message: "Title and abstract are required" });
+        }
+
+        // Process authors and keywords from form data
+        console.log('Processing authors:', req.body.authors);
+        let authors = [];
+        try {
+            if (Array.isArray(req.body.authors)) {
+                authors = req.body.authors;
+            } else if (typeof req.body.authors === 'string') {
+                // Check if it's a JSON string
+                if (req.body.authors.startsWith('[') && req.body.authors.endsWith(']')) {
+                    try {
+                        authors = JSON.parse(req.body.authors);
+                    } catch (e) {
+                        // If parsing fails, treat as a single author
+                        authors = [req.body.authors];
+                    }
+                } else {
+                    // Treat as a single author
+                    authors = [req.body.authors];
+                }
+            }
+        } catch (error) {
+            console.error('Error processing authors:', error);
+            authors = [];
+        }
+
+        console.log('Processing keywords:', req.body.keywords);
+        let keywords = [];
+        try {
+            if (Array.isArray(req.body.keywords)) {
+                keywords = req.body.keywords;
+            } else if (typeof req.body.keywords === 'string') {
+                // Check if it's a JSON string
+                if (req.body.keywords.startsWith('[') && req.body.keywords.endsWith(']')) {
+                    try {
+                        keywords = JSON.parse(req.body.keywords);
+                    } catch (e) {
+                        // If parsing fails, split by comma
+                        keywords = req.body.keywords.split(',').map(k => k.trim());
+                    }
+                } else {
+                    // Split by comma
+                    keywords = req.body.keywords.split(',').map(k => k.trim());
+                }
+            }
+        } catch (error) {
+            console.error('Error processing keywords:', error);
+            keywords = [];
+        }
 
         const docxFilePath = file.path;
         const pdfFilePath = path.join(
-            path.dirname(docxFilePath), 
+            path.dirname(docxFilePath),
             `${path.basename(docxFilePath, '.docx')}.pdf`
         );
 
+        console.log('DOCX file path:', docxFilePath);
+        console.log('PDF file path:', pdfFilePath);
+
+        // Extract text from DOCX and create PDF
         let extractedText;
         try {
+            console.log('Reading DOCX file for text extraction');
             const buffer = await fsPromises.readFile(docxFilePath);
             extractedText = await mammoth.extractRawText({ buffer });
+            console.log('Text extracted successfully, length:', extractedText.value.length);
         } catch (error) {
-            throw new Error('Failed to extract text from DOCX');
+            console.error('Failed to extract text from DOCX:', error);
+            throw new Error('Failed to extract text from DOCX: ' + error.message);
         }
 
-        await new Promise((resolve, reject) => {
-            const pdfDoc = new PDFDocument();
-            const pdfStream = fs.createWriteStream(pdfFilePath);
-            
-            pdfDoc.pipe(pdfStream);
-            pdfDoc.text(extractedText.value);
-            pdfDoc.end();
+        try {
+            console.log('Creating PDF from extracted text');
+            await new Promise((resolve, reject) => {
+                const pdfDoc = new PDFDocument();
+                const pdfStream = fs.createWriteStream(pdfFilePath);
 
-            pdfStream.on('finish', resolve);
-            pdfStream.on('error', reject);
-        });
+                pdfDoc.pipe(pdfStream);
+                pdfDoc.text(extractedText.value);
+                pdfDoc.end();
 
-        const authorIds = Array.isArray(authors) 
-            ? authors.map(author => author.trim()) 
-            : [authors.trim()];
+                pdfStream.on('finish', () => {
+                    console.log('PDF creation completed');
+                    resolve();
+                });
+                pdfStream.on('error', (err) => {
+                    console.error('PDF creation error:', err);
+                    reject(err);
+                });
+            });
+        } catch (error) {
+            console.error('Failed to create PDF:', error);
+            throw new Error('Failed to create PDF: ' + error.message);
+        }
 
-        const processedKeywords = Array.isArray(keywords) 
-            ? keywords.map(kw => kw.trim())
-            : keywords.split(",").map((kw) => kw.trim());
+        // Process authors and keywords
+        const processedAuthors = authors.map(author => author.trim()).filter(Boolean);
+        const processedKeywords = keywords.map(kw => kw.trim()).filter(Boolean);
 
-        const newSubmission = new Submission({
-            title: title.trim(),
-            abstract: abstract.trim(),
-            authors: authorIds,
-            docxFilePath,
-            pdfFilePath,
-            keywords: processedKeywords,
-            status: "submitted",
-        });
+        console.log('Processed authors:', processedAuthors);
+        console.log('Processed keywords:', processedKeywords);
 
-        await newSubmission.save();
+        // Create and save the submission
+        try {
+            console.log('Creating new submission document');
+            const newSubmission = new Submission({
+                title: title.trim(),
+                abstract: abstract.trim(),
+                authors: processedAuthors,
+                docxFilePath,
+                pdfFilePath,
+                keywords: processedKeywords,
+                status: "submitted",
+            });
 
-        res.status(201).json({ 
-            message: "Submission uploaded successfully", 
-            submission: newSubmission 
-        });
+            console.log('Saving submission to database');
+            await newSubmission.save();
+            console.log('Submission saved successfully with ID:', newSubmission._id);
+
+            res.status(201).json({
+                message: "Submission uploaded successfully",
+                submission: newSubmission
+            });
+        } catch (error) {
+            console.error('Failed to save submission:', error);
+            throw new Error('Failed to save submission: ' + error.message);
+        }
     } catch (error) {
         console.error('Upload error:', error);
-        
+
+        // Clean up files if there was an error
         if (req.file) {
-            await fsPromises.unlink(req.file.path).catch(() => {});
+            console.log('Cleaning up files due to error');
+            try {
+                await fsPromises.unlink(req.file.path);
+                console.log('Deleted DOCX file:', req.file.path);
+            } catch (e) {
+                console.error('Error deleting DOCX file:', e);
+            }
+
             const potentialPdfPath = req.file.path.replace('.docx', '.pdf');
-            await fsPromises.unlink(potentialPdfPath).catch(() => {});
+            try {
+                await fsPromises.unlink(potentialPdfPath);
+                console.log('Deleted PDF file:', potentialPdfPath);
+            } catch (e) {
+                console.error('Error deleting PDF file:', e);
+            }
         }
 
-        res.status(500).json({ 
-            message: "Failed to upload submission", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to upload submission",
+            error: error.message
         });
     }
 };
@@ -164,12 +351,12 @@ exports.uploadSubmission = async (req, res) => {
 // Get all submissions with pagination and filtering
 exports.getSubmissions = async (req, res) => {
     try {
-        const { 
-            page = 1, 
-            limit = 10, 
-            status, 
-            sortBy = 'createdAt', 
-            sortOrder = 'desc' 
+        const {
+            page = 1,
+            limit = 10,
+            status,
+            sortBy = 'createdAt',
+            sortOrder = 'desc'
         } = req.query;
 
         const filter = {};
@@ -192,9 +379,9 @@ exports.getSubmissions = async (req, res) => {
             totalSubmissions: total
         });
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to retrieve submissions", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to retrieve submissions",
+            error: error.message
         });
     }
 };
@@ -203,16 +390,16 @@ exports.getSubmissions = async (req, res) => {
 exports.getSubmissionById = async (req, res) => {
     try {
         const submission = await Submission.findById(req.params.id);
-        
+
         if (!submission) {
             return res.status(404).json({ message: "Submission not found" });
         }
 
         res.json(submission);
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to retrieve submission", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to retrieve submission",
+            error: error.message
         });
     }
 };
@@ -225,15 +412,15 @@ exports.updateSubmissionStatus = async (req, res) => {
 
         const validStatuses = ['submitted', 'under-review', 'accepted', 'rejected'];
         if (!validStatuses.includes(status)) {
-            return res.status(400).json({ 
-                message: "Invalid status", 
-                validStatuses 
+            return res.status(400).json({
+                message: "Invalid status",
+                validStatuses
             });
         }
 
         const submission = await Submission.findByIdAndUpdate(
-            id, 
-            { status }, 
+            id,
+            { status },
             { new: true, runValidators: true }
         );
 
@@ -246,9 +433,9 @@ exports.updateSubmissionStatus = async (req, res) => {
             submission
         });
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to update submission status", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to update submission status",
+            error: error.message
         });
     }
 };
@@ -274,14 +461,14 @@ exports.deleteSubmission = async (req, res) => {
 
         await submission.deleteOne();
 
-        res.json({ 
+        res.json({
             message: "Submission deleted successfully",
-            deletedSubmission: submission 
+            deletedSubmission: submission
         });
     } catch (error) {
-        res.status(500).json({ 
-            message: "Failed to delete submission", 
-            error: error.message 
+        res.status(500).json({
+            message: "Failed to delete submission",
+            error: error.message
         });
     }
 };
@@ -304,9 +491,9 @@ exports.searchSubmissions = async (req, res) => {
         };
 
         if (!searchFields[field]) {
-            return res.status(400).json({ 
-                message: "Invalid search field", 
-                validFields: Object.keys(searchFields) 
+            return res.status(400).json({
+                message: "Invalid search field",
+                validFields: Object.keys(searchFields)
             });
         }
 
@@ -318,34 +505,12 @@ exports.searchSubmissions = async (req, res) => {
             totalResults: submissions.length
         });
     } catch (error) {
-        res.status(500).json({ 
-            message: "Search failed", 
-            error: error.message 
+        res.status(500).json({
+            message: "Search failed",
+            error: error.message
         });
     }
 };
 
-// Enhanced multer middleware with better error handling
-exports.uploadMiddleware = (req, res, next) => {
-    upload.single("file")(req, res, function(err) {
-        if (err) {
-            console.error('Multer error:', err);
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(413).json({ 
-                    message: "File too large (max 50MB)" 
-                });
-            }
-            if (err.message.includes('Unexpected field')) {
-                return res.status(400).json({ 
-                    message: "Invalid file field name - must be 'file'",
-                    details: `Received fields: ${JSON.stringify(Object.keys(req.body))}`
-                });
-            }
-            return res.status(500).json({ 
-                message: "File upload failed",
-                error: err.message 
-            });
-        }
-        next();
-    });
-};
+// Use the same approach as journalController - direct multer middleware
+exports.uploadMiddleware = upload.single('file');

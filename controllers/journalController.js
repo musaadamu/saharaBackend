@@ -9,8 +9,21 @@ const PDFDocument = require("pdfkit");
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
-        const uploadDir = process.env.DOCUMENT_STORAGE_PATH || "uploads/journals";
-        console.log('Upload directory:', uploadDir);
+        // Handle the environment variable path correctly
+        let uploadDir;
+        if (process.env.DOCUMENT_STORAGE_PATH) {
+            // If it's a relative path starting with '../', resolve it relative to the current directory
+            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+            } else {
+                // Otherwise, use it as is or resolve it if it's a relative path
+                uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+            }
+        } else {
+            // Fallback to a default path
+            uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+        }
+        console.log('Upload directory (absolute):', uploadDir);
         try {
             // Create the directory with recursive option to create parent directories if they don't exist
             await fsPromises.mkdir(uploadDir, { recursive: true });
@@ -51,7 +64,21 @@ const fileFilter = (req, file, cb) => {
 
 // Create uploads directory if it doesn't exist
 const ensureUploadsDir = async () => {
-    const uploadDir = process.env.DOCUMENT_STORAGE_PATH || "uploads/journals";
+    // Handle the environment variable path correctly
+    let uploadDir;
+    if (process.env.DOCUMENT_STORAGE_PATH) {
+        // If it's a relative path starting with '../', resolve it relative to the current directory
+        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+            uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+        } else {
+            // Otherwise, use it as is or resolve it if it's a relative path
+            uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+        }
+    } else {
+        // Fallback to a default path
+        uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+    }
+    console.log('Ensuring upload directory exists (absolute path):', uploadDir);
     try {
         await fsPromises.mkdir(uploadDir, { recursive: true });
         console.log(`Ensured upload directory exists: ${uploadDir}`);
@@ -160,9 +187,33 @@ exports.uploadJournal = async (req, res) => {
         }
         console.log('Processed keywords:', keywords);
 
-        const docxFilePath = file.path;
+        // Store just the filename instead of the full path to avoid path issues
+        const docxFilename = path.basename(file.path);
+        console.log('Original file path:', file.path);
+        console.log('Extracted filename:', docxFilename);
+
+        // Store just the filename in the database
+        const docxFilePath = docxFilename;
         // Create a simple PDF path without conversion
-        const pdfFilePath = docxFilePath + '.pdf';
+        const pdfFilePath = docxFilename + '.pdf';
+
+        // Log the absolute paths for debugging
+        // Handle the environment variable path correctly
+        let uploadDir;
+        if (process.env.DOCUMENT_STORAGE_PATH) {
+            // If it's a relative path starting with '../', resolve it relative to the current directory
+            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+            } else {
+                // Otherwise, use it as is or resolve it if it's a relative path
+                uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+            }
+        } else {
+            // Fallback to a default path
+            uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+        }
+        console.log('Absolute docx path:', path.join(uploadDir, docxFilename));
+        console.log('Absolute pdf path:', path.join(uploadDir, docxFilename + '.pdf'));
 
         console.log('File paths:', {docxFilePath, pdfFilePath});
 
@@ -194,7 +245,7 @@ exports.uploadJournal = async (req, res) => {
                 keywords: keywordArray,
                 docxFilePath,
                 pdfFilePath,
-                status: "submitted"
+                status: "published"
             });
 
             await journal.save();
@@ -212,8 +263,27 @@ exports.uploadJournal = async (req, res) => {
             });
         } catch (err) {
             console.error('Journal save error:', err);
-            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting docx:', e));
-            await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting pdf:', e));
+            // Get the full path for cleanup
+            // Handle the environment variable path correctly
+            let uploadDir;
+            if (process.env.DOCUMENT_STORAGE_PATH) {
+                // If it's a relative path starting with '../', resolve it relative to the current directory
+                if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                    uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+                } else {
+                    // Otherwise, use it as is or resolve it if it's a relative path
+                    uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+                }
+            } else {
+                // Fallback to a default path
+                uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+            }
+            const fullDocxPath = path.join(uploadDir, docxFilePath);
+            const fullPdfPath = path.join(uploadDir, pdfFilePath);
+
+            console.log('Cleaning up files:', {fullDocxPath, fullPdfPath});
+            await fsPromises.unlink(fullDocxPath).catch(e => console.error('Error deleting docx:', e));
+            await fsPromises.unlink(fullPdfPath).catch(e => console.error('Error deleting pdf:', e));
             return res.status(500).json({ message: "Failed to save journal" });
         }
     } catch (error) {
@@ -229,11 +299,28 @@ exports.uploadJournal = async (req, res) => {
         // Clean up files if they were created
         if (req.file?.path) {
             console.log('Cleaning up uploaded file:', req.file.path);
+            // Use the actual file path from multer
             await fsPromises.unlink(req.file.path).catch(e => console.error('Error deleting uploaded file:', e));
         }
         if (typeof pdfFilePath !== 'undefined') {
-            console.log('Cleaning up PDF file:', pdfFilePath);
-            await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting pdf file:', e));
+            // Get the full path for cleanup
+            // Handle the environment variable path correctly
+            let uploadDir;
+            if (process.env.DOCUMENT_STORAGE_PATH) {
+                // If it's a relative path starting with '../', resolve it relative to the current directory
+                if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                    uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+                } else {
+                    // Otherwise, use it as is or resolve it if it's a relative path
+                    uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+                }
+            } else {
+                // Fallback to a default path
+                uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+            }
+            const fullPdfPath = path.join(uploadDir, pdfFilePath);
+            console.log('Cleaning up PDF file:', fullPdfPath);
+            await fsPromises.unlink(fullPdfPath).catch(e => console.error('Error deleting pdf file:', e));
         }
 
         return res.status(500).json({

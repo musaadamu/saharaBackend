@@ -2,24 +2,60 @@ const path = require('path');
 const fs = require('fs').promises;
 const Journal = require('../models/Journal');
 
-// Use environment variable or fallback to a default path
-const DOCUMENT_STORAGE_PATH = process.env.DOCUMENT_STORAGE_PATH || path.join(__dirname, '..', 'uploads', 'journals');
+// Handle the environment variable path correctly
+let DOCUMENT_STORAGE_PATH;
+if (process.env.DOCUMENT_STORAGE_PATH) {
+    // If it's a relative path starting with '../', resolve it relative to the current directory
+    if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+        DOCUMENT_STORAGE_PATH = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+    } else {
+        // Otherwise, use it as is or resolve it if it's a relative path
+        DOCUMENT_STORAGE_PATH = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+    }
+} else {
+    // Fallback to a default path
+    DOCUMENT_STORAGE_PATH = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+}
 
 // Log the storage path for debugging
-console.log('Document storage path:', DOCUMENT_STORAGE_PATH);
+console.log('Document storage path (absolute):', DOCUMENT_STORAGE_PATH);
+console.log('Environment variable value:', process.env.DOCUMENT_STORAGE_PATH);
 
 // Helper function to resolve file paths correctly
 const resolveFilePath = (relativePath) => {
     // If the path is already absolute, use it directly
     if (path.isAbsolute(relativePath)) {
+        console.log('Path is already absolute:', relativePath);
         return relativePath;
     }
 
-    // If the path starts with 'uploads/', remove that prefix as we'll add the full path
-    const normalizedPath = relativePath.replace(/^uploads[\\/]/, '');
+    // Log the original path for debugging
+    console.log('Original path:', relativePath);
 
-    // Join with the storage path
-    return path.join(DOCUMENT_STORAGE_PATH, normalizedPath);
+    // If the path starts with '../', it's relative to the backend directory
+    if (relativePath.startsWith('../')) {
+        // Resolve it relative to the backend directory
+        // First, get the correct path by splitting and joining to ensure proper path separators
+        const pathParts = relativePath.split('/');
+        // Remove the first '../' element
+        pathParts.shift();
+        // Join the remaining parts with the correct path separator
+        const relativePart = pathParts.join(path.sep);
+
+        const absolutePath = path.resolve(path.join(__dirname, '..', '..', relativePart));
+        console.log('Resolved relative path:', absolutePath);
+        return absolutePath;
+    }
+
+    // Extract the filename regardless of path format
+    const filename = path.basename(relativePath);
+    console.log('Extracted filename:', filename);
+
+    // Create an absolute path by joining the storage path with the filename
+    const absolutePath = path.resolve(path.join(DOCUMENT_STORAGE_PATH, filename));
+    console.log('Resolved absolute path:', absolutePath);
+
+    return absolutePath;
 };
 
 exports.downloadPdfFile = async (req, res) => {
@@ -39,25 +75,32 @@ exports.downloadPdfFile = async (req, res) => {
         console.log('Resolved PDF file path:', filePath);
         console.log('Attempting to download PDF file');
 
-        // Check if file exists
-        await fs.access(filePath);
+        try {
+            // Check if file exists
+            await fs.access(filePath);
 
-        // Extract filename from the path
-        const fileName = path.basename(filePath);
+            // Extract filename from the path
+            const fileName = path.basename(filePath);
 
-        // Set headers for PDF download
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+            // Set headers for PDF download
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
 
-        // Stream the file
-        res.sendFile(filePath, (err) => {
-            if (err) {
-                console.error('Download error:', err);
-                if (!res.headersSent) {
-                    res.status(500).json({ message: 'Error downloading file' });
+            // Stream the file
+            res.sendFile(filePath, (err) => {
+                if (err) {
+                    console.error('Download error:', err);
+                    if (!res.headersSent) {
+                        res.status(500).json({ message: 'Error downloading file' });
+                    }
                 }
-            }
-        });
+            });
+        } catch (accessError) {
+            // If direct access fails, try using the direct-file route
+            console.log('Direct file access failed, redirecting to direct-file route');
+            const fileName = path.basename(journal.pdfFilePath);
+            res.redirect(`/direct-file/journals/${fileName}`);
+        }
     } catch (error) {
         console.error('File download error:', error);
 
@@ -73,7 +116,7 @@ exports.downloadPdfFile = async (req, res) => {
                 message: 'File not found',
                 details: {
                     journalId: req.params.id,
-                    storedPath: journal.pdfFilePath
+                    path: error.path || 'Path not available'
                 }
             });
         }
@@ -99,25 +142,32 @@ exports.downloadDocxFile = async (req, res) => {
         console.log('Resolved DOCX file path:', filePath);
         console.log('Attempting to download DOCX file');
 
-        // Check if file exists
-        await fs.access(filePath);
+        try {
+            // Check if file exists
+            await fs.access(filePath);
 
-        // Extract filename from the path
-        const fileName = path.basename(filePath);
+            // Extract filename from the path
+            const fileName = path.basename(filePath);
 
-        // Set headers for DOCX download
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+            // Set headers for DOCX download
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
 
-        // Stream the file
-        res.sendFile(filePath, (err) => {
-            if (err) {
-                console.error('Download error:', err);
-                if (!res.headersSent) {
-                    res.status(500).json({ message: 'Error downloading file' });
+            // Stream the file
+            res.sendFile(filePath, (err) => {
+                if (err) {
+                    console.error('Download error:', err);
+                    if (!res.headersSent) {
+                        res.status(500).json({ message: 'Error downloading file' });
+                    }
                 }
-            }
-        });
+            });
+        } catch (accessError) {
+            // If direct access fails, try using the direct-file route
+            console.log('Direct file access failed, redirecting to direct-file route');
+            const fileName = path.basename(journal.docxFilePath);
+            res.redirect(`/direct-file/journals/${fileName}`);
+        }
     } catch (error) {
         console.error('File download error:', error);
 
@@ -133,7 +183,7 @@ exports.downloadDocxFile = async (req, res) => {
                 message: 'File not found',
                 details: {
                     journalId: req.params.id,
-                    storedPath: journal.docxFilePath
+                    path: error.path || 'Path not available'
                 }
             });
         }
@@ -179,7 +229,7 @@ exports.readFileContent = async (req, res) => {
                 message: 'File not found',
                 details: {
                     journalId: req.params.id,
-                    storedPath: journal.pdfFilePath
+                    path: error.path || 'Path not available'
                 }
             });
         }
