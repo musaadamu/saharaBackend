@@ -22,6 +22,7 @@ router.post('/logout', protect, logout);
 router.post('/forgot-password', forgotPassword);
 router.put('/profile', protect, updateUser); // Route for updating user
 router.get('/profile', protect, getProfile); // Route for getting user profile
+router.get('/me', protect, getProfile); // Alias for /profile to match frontend expectations
 router.post('/create-admin', protect, adminOnly, createAdmin); // Route for creating admin users (admin only)
 
 module.exports = router;

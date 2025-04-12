@@ -267,7 +267,10 @@ app.get('/health', (req, res) => {
 });
 
 // Mount routes with /api prefix
-app.use('/', authRoutes);
+app.use('/', authRoutes); // Auth routes at root path
+app.use('/api/auth', authRoutes); // Also mount auth routes at /api/auth for compatibility
+app.use('/api/api/auth', authRoutes); // Also mount auth routes at /api/auth for compatibility
+
 app.use('/api/journals', journalRoutes);
 app.use('/api/journals', journalDownloadRoutes);
 
