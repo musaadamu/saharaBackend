@@ -32,30 +32,48 @@ const resolveFilePath = (relativePath) => {
     // Log the original path for debugging
     console.log('Original path:', relativePath);
 
-    // If the path starts with '../', it's relative to the backend directory
-    if (relativePath.startsWith('../')) {
-        // Resolve it relative to the backend directory
-        // First, get the correct path by splitting and joining to ensure proper path separators
-        const pathParts = relativePath.split('/');
-        // Remove the first '../' element
-        pathParts.shift();
-        // Join the remaining parts with the correct path separator
-        const relativePart = pathParts.join(path.sep);
-
-        const absolutePath = path.resolve(path.join(__dirname, '..', '..', relativePart));
-        console.log('Resolved relative path:', absolutePath);
-        return absolutePath;
-    }
-
     // Extract the filename regardless of path format
     const filename = path.basename(relativePath);
     console.log('Extracted filename:', filename);
 
-    // Create an absolute path by joining the storage path with the filename
-    const absolutePath = path.resolve(path.join(DOCUMENT_STORAGE_PATH, filename));
-    console.log('Resolved absolute path:', absolutePath);
+    // Create an array of possible file locations to check
+    const possiblePaths = [
+        // Check in the main uploads/journals directory
+        path.resolve(path.join(DOCUMENT_STORAGE_PATH, filename)),
+        // Check in the backend/uploads/journals directory
+        path.resolve(path.join(__dirname, '..', 'uploads', 'journals', filename)),
+        // Check in the parent directory's uploads/journals
+        path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', filename))
+    ];
 
-    return absolutePath;
+    // If the path includes 'uploads/journals' or 'uploads\journals', try that specific path first
+    if (relativePath.includes('uploads/journals') || relativePath.includes('uploads\\journals')) {
+        // For paths like 'uploads/journals/file.pdf' or '../uploads/journals/file.pdf'
+        let normalizedPath = relativePath.replace(/\.\.\//g, '').replace(/\//g, path.sep).replace(/\\\\/g, path.sep);
+
+        // Add the specific path to the beginning of the array (highest priority)
+        possiblePaths.unshift(
+            path.resolve(path.join(__dirname, '..', '..', normalizedPath)),
+            path.resolve(path.join(__dirname, '..', normalizedPath))
+        );
+    }
+
+    // Check each path and return the first one that exists
+    for (const possiblePath of possiblePaths) {
+        try {
+            if (require('fs').existsSync(possiblePath)) {
+                console.log('File found at:', possiblePath);
+                return possiblePath;
+            }
+        } catch (err) {
+            // Continue to the next path
+        }
+    }
+
+    // If no file was found, return the default path (first in the array)
+    // This will likely fail later, but we need to return something
+    console.log('No file found, using default path:', possiblePaths[0]);
+    return possiblePaths[0];
 };
 
 exports.downloadPdfFile = async (req, res) => {
@@ -86,6 +104,11 @@ exports.downloadPdfFile = async (req, res) => {
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
 
+            // Add CORS headers
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
             // Stream the file
             res.sendFile(filePath, (err) => {
                 if (err) {
@@ -96,10 +119,55 @@ exports.downloadPdfFile = async (req, res) => {
                 }
             });
         } catch (accessError) {
-            // If direct access fails, try using the direct-file route
-            console.log('Direct file access failed, redirecting to direct-file route');
+            console.log('Direct file access failed, trying alternative methods');
+
+            // Try to find the file in common locations
             const fileName = path.basename(journal.pdfFilePath);
-            res.redirect(`/direct-file/journals/${fileName}`);
+            const alternativePaths = [
+                path.join(DOCUMENT_STORAGE_PATH, fileName),
+                path.join(__dirname, '..', 'uploads', 'journals', fileName),
+                path.join(__dirname, '..', '..', 'uploads', 'journals', fileName)
+            ];
+
+            // Check each alternative path
+            let fileFound = false;
+            for (const altPath of alternativePaths) {
+                try {
+                    if (require('fs').existsSync(altPath)) {
+                        console.log('File found at alternative location:', altPath);
+
+                        // Set headers for PDF download
+                        res.setHeader('Content-Type', 'application/pdf');
+                        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+
+                        // Add CORS headers
+                        res.setHeader('Access-Control-Allow-Origin', '*');
+                        res.setHeader('Access-Control-Allow-Methods', 'GET');
+                        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+                        // Stream the file
+                        res.sendFile(altPath, (err) => {
+                            if (err) {
+                                console.error('Download error from alternative path:', err);
+                                if (!res.headersSent) {
+                                    res.status(500).json({ message: 'Error downloading file' });
+                                }
+                            }
+                        });
+
+                        fileFound = true;
+                        break;
+                    }
+                } catch (err) {
+                    // Continue to the next path
+                }
+            }
+
+            // If no alternative path worked, redirect to direct-file route as last resort
+            if (!fileFound) {
+                console.log('No alternative paths worked, redirecting to direct-file route');
+                res.redirect(`/direct-file/journals/${fileName}`);
+            }
         }
     } catch (error) {
         console.error('File download error:', error);
@@ -153,6 +221,11 @@ exports.downloadDocxFile = async (req, res) => {
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
             res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
 
+            // Add CORS headers
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
             // Stream the file
             res.sendFile(filePath, (err) => {
                 if (err) {
@@ -163,10 +236,55 @@ exports.downloadDocxFile = async (req, res) => {
                 }
             });
         } catch (accessError) {
-            // If direct access fails, try using the direct-file route
-            console.log('Direct file access failed, redirecting to direct-file route');
+            console.log('Direct file access failed, trying alternative methods');
+
+            // Try to find the file in common locations
             const fileName = path.basename(journal.docxFilePath);
-            res.redirect(`/direct-file/journals/${fileName}`);
+            const alternativePaths = [
+                path.join(DOCUMENT_STORAGE_PATH, fileName),
+                path.join(__dirname, '..', 'uploads', 'journals', fileName),
+                path.join(__dirname, '..', '..', 'uploads', 'journals', fileName)
+            ];
+
+            // Check each alternative path
+            let fileFound = false;
+            for (const altPath of alternativePaths) {
+                try {
+                    if (require('fs').existsSync(altPath)) {
+                        console.log('File found at alternative location:', altPath);
+
+                        // Set headers for DOCX download
+                        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+                        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+
+                        // Add CORS headers
+                        res.setHeader('Access-Control-Allow-Origin', '*');
+                        res.setHeader('Access-Control-Allow-Methods', 'GET');
+                        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+                        // Stream the file
+                        res.sendFile(altPath, (err) => {
+                            if (err) {
+                                console.error('Download error from alternative path:', err);
+                                if (!res.headersSent) {
+                                    res.status(500).json({ message: 'Error downloading file' });
+                                }
+                            }
+                        });
+
+                        fileFound = true;
+                        break;
+                    }
+                } catch (err) {
+                    // Continue to the next path
+                }
+            }
+
+            // If no alternative path worked, redirect to direct-file route as last resort
+            if (!fileFound) {
+                console.log('No alternative paths worked, redirecting to direct-file route');
+                res.redirect(`/direct-file/journals/${fileName}`);
+            }
         }
     } catch (error) {
         console.error('File download error:', error);

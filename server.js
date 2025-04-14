@@ -394,13 +394,32 @@ app.get('/direct-file/:type/:filename', (req, res) => {
         return res.status(400).json({ message: 'Invalid file type' });
     }
 
+    // Add backend/uploads/journals path for better file finding
+    if (type === 'journals') {
+        possiblePaths.push(
+            path.resolve(path.join(__dirname, '..', 'backend', 'uploads', 'journals', filename)),
+            path.resolve(path.join(__dirname, '..', '..', 'backend', 'uploads', 'journals', filename))
+        );
+
+        // Try to handle the case where the filename might be URL-encoded
+        if (filename.includes('%20')) {
+            const decodedFilename = decodeURIComponent(filename);
+            possiblePaths.push(
+                path.resolve(path.join(__dirname, '..', 'uploads', 'journals', decodedFilename)),
+                path.resolve(path.join(__dirname, 'uploads', 'journals', decodedFilename)),
+                path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', decodedFilename)),
+                path.resolve(path.join(__dirname, '..', 'backend', 'uploads', 'journals', decodedFilename))
+            );
+        }
+    }
+
     console.log('Trying to find file in these locations:', possiblePaths);
 
     // Try each path until we find the file
     let filePath = null;
-    for (const path of possiblePaths) {
-        if (fs.existsSync(path)) {
-            filePath = path;
+    for (const pathToCheck of possiblePaths) {
+        if (fs.existsSync(pathToCheck)) {
+            filePath = pathToCheck;
             console.log('File found at:', filePath);
             break;
         }
@@ -425,6 +444,11 @@ app.get('/direct-file/:type/:filename', (req, res) => {
     // Set headers and send the file
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    // Add CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     // Stream the file to the response
     const fileStream = fs.createReadStream(filePath);
