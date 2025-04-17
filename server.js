@@ -183,6 +183,7 @@ const submissionDownloadRoutes = require('./routes/submissionDownloadRoutes');
 const journalRoutes = require('./routes/journalRoutes');
 const journalDownloadRoutes = require('./routes/journalDownloadRoutes');
 const authRoutes = require('./routes/authRoutes');
+const diagnosticRoutes = require('./routes/diagnosticRoutes');
 
 // Validate required environment variables
 const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'PORT'];
@@ -289,6 +290,9 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/submissions', submissionDownloadRoutes);
 app.use('/api/api/submissions', submissionRoutes);
 app.use('/api/api/submissions', submissionDownloadRoutes);
+
+// Mount diagnostic routes
+app.use('/api/diagnostic', diagnosticRoutes);
 
 // Serve static files from uploads directory
 // Handle the environment variable path correctly
@@ -667,6 +671,79 @@ app.get('/find-file/:filename', async (req, res) => {
         searchedDirectories: dirsToSearch,
         results
     });
+});
+
+// Add a diagnostic route to check file paths
+app.get('/check-file/:journalId/:fileType', async (req, res) => {
+    try {
+        const { journalId, fileType } = req.params;
+
+        // Find the journal
+        const journal = await Journal.findById(journalId);
+        if (!journal) {
+            return res.status(404).json({ message: 'Journal not found' });
+        }
+
+        // Get the file path based on file type
+        let filePath;
+        if (fileType === 'pdf') {
+            filePath = journal.pdfFilePath;
+        } else if (fileType === 'docx') {
+            filePath = journal.docxFilePath;
+        } else {
+            return res.status(400).json({ message: 'Invalid file type' });
+        }
+
+        if (!filePath) {
+            return res.status(404).json({ message: `No ${fileType} file path found for this journal` });
+        }
+
+        // Check possible file locations
+        const possiblePaths = [
+            path.resolve(path.join(__dirname, '..', 'uploads', 'journals', path.basename(filePath))),
+            path.resolve(path.join(__dirname, 'uploads', 'journals', path.basename(filePath))),
+            path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', path.basename(filePath))),
+            path.resolve(path.join(__dirname, '..', 'backend', 'uploads', 'journals', path.basename(filePath))),
+            path.resolve(path.join(__dirname, '..', '..', 'backend', 'uploads', 'journals', path.basename(filePath)))
+        ];
+
+        // Check if DOCUMENT_STORAGE_PATH is defined
+        if (process.env.DOCUMENT_STORAGE_PATH) {
+            possiblePaths.push(
+                path.resolve(path.join(process.env.DOCUMENT_STORAGE_PATH, path.basename(filePath)))
+            );
+        }
+
+        // Check each path
+        const results = [];
+        for (const pathToCheck of possiblePaths) {
+            try {
+                const exists = fs.existsSync(pathToCheck);
+                results.push({
+                    path: pathToCheck,
+                    exists
+                });
+            } catch (err) {
+                results.push({
+                    path: pathToCheck,
+                    exists: false,
+                    error: err.message
+                });
+            }
+        }
+
+        // Return the results
+        res.json({
+            journalId,
+            fileType,
+            filePath,
+            fileName: path.basename(filePath),
+            possiblePaths: results
+        });
+    } catch (err) {
+        console.error('Error checking file:', err);
+        res.status(500).json({ message: 'Error checking file', error: err.message });
+    }
 });
 
 // Add a route to list all files in the uploads directory
