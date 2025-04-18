@@ -282,8 +282,8 @@ app.use('/', authRoutes); // Auth routes at root path
 app.use('/api/auth', authRoutes); // Also mount auth routes at /api/auth for compatibility
 app.use('/api/api/auth', authRoutes); // Also mount auth routes at /api/auth for compatibility
 
-app.use('/journals', journalRoutes);
-app.use('/journals', journalDownloadRoutes);
+app.use('/api/journals', journalRoutes);
+app.use('/api/journals', journalDownloadRoutes);
 
 // Handle both /api/submissions and /api/api/submissions for backward compatibility
 app.use('/api/submissions', submissionRoutes);
