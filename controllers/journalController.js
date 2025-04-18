@@ -194,8 +194,8 @@ exports.uploadJournal = async (req, res) => {
 
         // Store just the filename in the database
         const docxFilePath = docxFilename;
-        // Create a simple PDF path without conversion
-        const pdfFilePath = docxFilename + '.pdf';
+        // Create a simple PDF path by replacing the original extension with .pdf
+        const pdfFilePath = docxFilename.replace(path.extname(docxFilename), '.pdf');
 
         // Log the absolute paths for debugging
         // Handle the environment variable path correctly
