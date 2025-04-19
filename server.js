@@ -284,6 +284,10 @@ app.use('/api/api/auth', authRoutes); // Also mount auth routes at /api/auth for
 
 app.use('/api/journals', journalRoutes);
 app.use('/api/journals', journalDownloadRoutes);
+app.use('/journals', journalRoutes);
+app.use('/journals', journalDownloadRoutes);
+app.use('/api/api/journals', journalRoutes);
+app.use('/api/api/journals', journalDownloadRoutes);
 
 // Handle both /api/submissions and /api/api/submissions for backward compatibility
 app.use('/api/submissions', submissionRoutes);
