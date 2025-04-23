@@ -15,16 +15,18 @@ This guide explains how to deploy the Sahara Journal System to production enviro
 
    ```
    NODE_ENV=production
-   MONGODB_URI=mongodb+srv://msmajemusa4:5mHVuJ8rJDs1kAU4@saharajournal.upe7l.mongodb.net/?retryWrites=true&w=majority&appName=saharajournal
-   JWT_SECRET=Jx92!mN#5rQzT8vVpY7
+   MONGODB_URI=<your-mongodb-connection-string>
+   JWT_SECRET=<your-jwt-secret>
    PORT=5000
-   GOOGLE_CLIENT_ID=38551269334-krfornjs786u7qv2qv3rfv82q294i9h0.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=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
-   GOOGLE_REFRESH_TOKEN=1//03V3pWNvmlPmKCgYIARAAGAMSNwF-L9IrIowUTTqUjVvPNH_ArK62xCwh6qOLFuYOfad9CC7q-euY9qDv-KmN8ZQxFVFRh6Mz_v0
-   GOOGLE_DRIVE_FOLDER_ID=1zsFE8u3niAJWDXyKlq6p4tv3do7ns7f6
+   GOOGLE_CLIENT_ID=<your-google-client-id>
+   GOOGLE_CLIENT_SECRET=<your-google-client-secret>
+   GOOGLE_REFRESH_TOKEN=<your-google-refresh-token>
+   GOOGLE_DRIVE_FOLDER_ID=<your-google-drive-folder-id>
    DOCUMENT_STORAGE_PATH=/tmp/journals
    DOCUMENT_STORAGE_URL=https://saharabackend-v190.onrender.com/api/journals/download
    ```
+
+   **Note:** Replace the placeholder values with your actual credentials. Never commit actual credentials to your repository.
 
 3. **Important Notes for Render Deployment**
    - Render's filesystem is ephemeral, meaning files saved to the filesystem will be lost when the service restarts

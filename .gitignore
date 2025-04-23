@@ -18,6 +18,16 @@ pids
 .env.test
 .env.production
 
+# Credentials and secrets
+google-credentials.json
+*credentials*.json
+*.pem
+*.key
+*.keystore
+*secret*
+*token*
+*oauth*
+
 # Node modules
 node_modules/
 node_modules/*
