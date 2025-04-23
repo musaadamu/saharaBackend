@@ -1,3 +1,4 @@
+
 const fs = require("fs");
 const fsPromises = require("fs").promises;
 const Journal = require("../models/Journal");
@@ -5,24 +6,45 @@ const multer = require("multer");
 const path = require("path");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
+const mongoose = require("mongoose");
+const { uploadFile, deleteFile } = require("../utils/googleDrive");
+
+// Helper function to get the upload directory path
+const getUploadDir = () => {
+    let uploadDir;
+    if (process.env.DOCUMENT_STORAGE_PATH) {
+        // If it's a relative path starting with '../', resolve it relative to the current directory
+        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+            uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
+        } else {
+            // Otherwise, use it as is or resolve it if it's a relative path
+            uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
+        }
+    } else {
+        // Fallback to a default path
+        uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+    }
+    return uploadDir;
+};
+
+// Create uploads directory if it doesn't exist
+const ensureUploadsDir = async () => {
+    const uploadDir = getUploadDir();
+    console.log('Ensuring upload directory exists (absolute path):', uploadDir);
+    try {
+        await fsPromises.mkdir(uploadDir, { recursive: true });
+        console.log(`Ensured upload directory exists: ${uploadDir}`);
+        return true;
+    } catch (error) {
+        console.error(`Failed to create upload directory: ${uploadDir}`, error);
+        return false;
+    }
+};
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
-        // Handle the environment variable path correctly
-        let uploadDir;
-        if (process.env.DOCUMENT_STORAGE_PATH) {
-            // If it's a relative path starting with '../', resolve it relative to the current directory
-            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-                uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
-            } else {
-                // Otherwise, use it as is or resolve it if it's a relative path
-                uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
-            }
-        } else {
-            // Fallback to a default path
-            uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
-        }
+        const uploadDir = getUploadDir();
         console.log('Upload directory (absolute):', uploadDir);
         try {
             // Create the directory with recursive option to create parent directories if they don't exist
@@ -62,33 +84,6 @@ const fileFilter = (req, file, cb) => {
     }
 };
 
-// Create uploads directory if it doesn't exist
-const ensureUploadsDir = async () => {
-    // Handle the environment variable path correctly
-    let uploadDir;
-    if (process.env.DOCUMENT_STORAGE_PATH) {
-        // If it's a relative path starting with '../', resolve it relative to the current directory
-        if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-            uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
-        } else {
-            // Otherwise, use it as is or resolve it if it's a relative path
-            uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
-        }
-    } else {
-        // Fallback to a default path
-        uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
-    }
-    console.log('Ensuring upload directory exists (absolute path):', uploadDir);
-    try {
-        await fsPromises.mkdir(uploadDir, { recursive: true });
-        console.log(`Ensured upload directory exists: ${uploadDir}`);
-        return true;
-    } catch (error) {
-        console.error(`Failed to create upload directory: ${uploadDir}`, error);
-        return false;
-    }
-};
-
 // Call this function to ensure the directory exists
 ensureUploadsDir();
 
@@ -102,14 +97,136 @@ const upload = multer({
     }
 });
 
+// Helper function to process array data from form
+const processArrayData = (data) => {
+    let result = [];
+    try {
+        if (Array.isArray(data)) {
+            result = data;
+        } else if (typeof data === 'string') {
+            // Check if it's a JSON string
+            if (data.startsWith('[') && data.endsWith(']')) {
+                try {
+                    result = JSON.parse(data);
+                } catch (e) {
+                    // If parsing fails, treat as comma-separated string
+                    result = data.split(',').map(item => item.trim());
+                }
+            } else {
+                // Treat as comma-separated string
+                result = data.split(',').map(item => item.trim());
+            }
+        }
+    } catch (e) {
+        console.error('Error processing array data:', e);
+        result = [];
+    }
+    return result;
+};
+
+// Helper function to clean up files
+const cleanupFiles = async (docxPath, pdfPath) => {
+    try {
+        if (docxPath) {
+            console.log('Cleaning up docx file:', docxPath);
+            await fsPromises.unlink(docxPath).catch(e => console.error('Error deleting docx:', e));
+        }
+        if (pdfPath) {
+            console.log('Cleaning up PDF file:', pdfPath);
+            await fsPromises.unlink(pdfPath).catch(e => console.error('Error deleting pdf:', e));
+        }
+    } catch (error) {
+        console.error('Error during cleanup:', error);
+    }
+};
+
 exports.uploadMiddleware = upload.single('file');
+
+// Convert DOCX to PDF
+async function convertDocxToPdf(docxPath) {
+    console.log('=== PDF CONVERSION STARTED ===');
+    console.log('Converting DOCX to PDF:', docxPath);
+    const pdfPath = docxPath.replace('.docx', '.pdf');
+    console.log('Target PDF path:', pdfPath);
+
+    try {
+        // Check if DOCX file exists
+        try {
+            await fsPromises.access(docxPath, fs.constants.F_OK);
+            const stats = await fsPromises.stat(docxPath);
+            console.log('DOCX file exists, size:', stats.size, 'bytes');
+            if (stats.size === 0) {
+                throw new Error('DOCX file is empty (0 bytes)');
+            }
+        } catch (err) {
+            console.error('ERROR: DOCX file does not exist or cannot be accessed:', err);
+            throw err;
+        }
+
+        // Extract text from DOCX
+        console.log('Reading DOCX file for text extraction');
+        const buffer = await fsPromises.readFile(docxPath);
+        console.log('DOCX file read successfully, buffer size:', buffer.length, 'bytes');
+
+        console.log('Extracting text from DOCX...');
+        const extractedText = await mammoth.extractRawText({ buffer });
+        console.log('Text extracted successfully, length:', extractedText.value.length, 'characters');
+
+        if (extractedText.value.length === 0) {
+            console.error('ERROR: Extracted text is empty');
+            throw new Error('Extracted text is empty');
+        }
+
+        // Create PDF from extracted text
+        console.log('Creating PDF from extracted text');
+        await new Promise((resolve, reject) => {
+            const pdfDoc = new PDFDocument();
+            const pdfStream = fs.createWriteStream(pdfPath);
+
+            pdfDoc.pipe(pdfStream);
+            pdfDoc.text(extractedText.value);
+            pdfDoc.end();
+
+            pdfStream.on('finish', () => {
+                console.log('PDF creation completed');
+                resolve();
+            });
+            pdfStream.on('error', (err) => {
+                console.error('PDF creation error:', err);
+                reject(err);
+            });
+        });
+
+        // Verify PDF was created
+        try {
+            const pdfStats = await fsPromises.stat(pdfPath);
+            console.log('PDF created successfully at:', pdfPath, 'size:', pdfStats.size, 'bytes');
+            if (pdfStats.size === 0) {
+                throw new Error('Generated PDF file is empty (0 bytes)');
+            }
+        } catch (err) {
+            console.error('ERROR: PDF verification failed:', err);
+            throw err;
+        }
+
+        console.log('=== PDF CONVERSION COMPLETED SUCCESSFULLY ===');
+        return pdfPath;
+    } catch (error) {
+        console.error('=== PDF CONVERSION FAILED ===');
+        console.error('Failed to convert DOCX to PDF:', error);
+        console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+        throw new Error('Failed to convert DOCX to PDF: ' + error.message);
+    }
+}
 
 // Upload and convert DOCX to PDF
 exports.uploadJournal = async (req, res) => {
     try {
+        console.log('🔴🔴🔴 UPLOAD JOURNAL PROCESS STARTED - MODIFIED VERSION (TIMESTAMP: ' + new Date().toISOString() + ') 🔴🔴🔴');
         console.log('Upload journal request received');
         console.log('Request body:', req.body);
         console.log('Uploaded file:', req.file ? 'File received' : 'No file received');
+        console.log('SERVER RESTART TEST - THIS LINE SHOULD APPEAR IN LOGS');
         if (req.file) {
             console.log('File details:', {
                 filename: req.file.filename,
@@ -121,6 +238,11 @@ exports.uploadJournal = async (req, res) => {
         }
         console.log('Storage path:', process.env.DOCUMENT_STORAGE_PATH);
         console.log('Current directory:', __dirname);
+        console.log('Google Drive Folder ID:', process.env.GOOGLE_DRIVE_FOLDER_ID);
+        console.log('Google Drive Credentials:');
+        console.log('- Client ID:', process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 10) + '...' : 'Not set');
+        console.log('- Client Secret:', process.env.GOOGLE_CLIENT_SECRET ? process.env.GOOGLE_CLIENT_SECRET.substring(0, 10) + '...' : 'Not set');
+        console.log('- Refresh Token:', process.env.GOOGLE_REFRESH_TOKEN ? process.env.GOOGLE_REFRESH_TOKEN.substring(0, 10) + '...' : 'Not set');
 
         const { title, abstract } = req.body;
         const file = req.file;
@@ -138,88 +260,91 @@ exports.uploadJournal = async (req, res) => {
 
         // Process authors and keywords from form data
         console.log('Processing authors:', req.body.authors);
-        let authors = [];
-        try {
-            if (Array.isArray(req.body.authors)) {
-                authors = req.body.authors;
-            } else if (typeof req.body.authors === 'string') {
-                // Check if it's a JSON string
-                if (req.body.authors.startsWith('[') && req.body.authors.endsWith(']')) {
-                    try {
-                        authors = JSON.parse(req.body.authors);
-                    } catch (e) {
-                        // If parsing fails, treat as comma-separated string
-                        authors = req.body.authors.split(',').map(a => a.trim());
-                    }
-                } else {
-                    // Treat as comma-separated string
-                    authors = req.body.authors.split(',').map(a => a.trim());
-                }
-            }
-        } catch (e) {
-            console.error('Error processing authors:', e);
-            authors = [];
-        }
+        const authors = processArrayData(req.body.authors);
         console.log('Processed authors:', authors);
 
         console.log('Processing keywords:', req.body.keywords);
-        let keywords = [];
-        try {
-            if (Array.isArray(req.body.keywords)) {
-                keywords = req.body.keywords;
-            } else if (typeof req.body.keywords === 'string') {
-                // Check if it's a JSON string
-                if (req.body.keywords.startsWith('[') && req.body.keywords.endsWith(']')) {
-                    try {
-                        keywords = JSON.parse(req.body.keywords);
-                    } catch (e) {
-                        // If parsing fails, treat as comma-separated string
-                        keywords = req.body.keywords.split(',').map(k => k.trim());
-                    }
-                } else {
-                    // Treat as comma-separated string
-                    keywords = req.body.keywords.split(',').map(k => k.trim());
-                }
-            }
-        } catch (e) {
-            console.error('Error processing keywords:', e);
-            keywords = [];
-        }
+        const keywords = processArrayData(req.body.keywords);
         console.log('Processed keywords:', keywords);
 
-        // Store just the filename instead of the full path to avoid path issues
-        const docxFilename = path.basename(file.path);
-        console.log('Original file path:', file.path);
-        console.log('Extracted filename:', docxFilename);
-
-        // Store just the filename in the database
-        const docxFilePath = docxFilename;
-        // Create a simple PDF path by replacing the original extension with .pdf
-        const pdfFilePath = docxFilename.replace(path.extname(docxFilename), '.pdf');
-
-        // Log the absolute paths for debugging
-        // Handle the environment variable path correctly
-        let uploadDir;
-        if (process.env.DOCUMENT_STORAGE_PATH) {
-            // If it's a relative path starting with '../', resolve it relative to the current directory
-            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-                uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
-            } else {
-                // Otherwise, use it as is or resolve it if it's a relative path
-                uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
-            }
-        } else {
-            // Fallback to a default path
-            uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+        // Convert DOCX to PDF
+        let pdfPath = null;
+        try {
+            pdfPath = await convertDocxToPdf(file.path);
+            console.log('PDF generated at:', pdfPath);
+        } catch (error) {
+            console.error('PDF conversion failed:', error);
+            // Continue with upload even if PDF conversion fails
         }
-        console.log('Absolute docx path:', path.join(uploadDir, docxFilename));
-        console.log('Absolute pdf path:', path.join(uploadDir, docxFilename + '.pdf'));
 
-        console.log('File paths:', {docxFilePath, pdfFilePath});
+        // Create a temporary journal ID for file metadata
+        const tempJournalId = new mongoose.Types.ObjectId();
+        console.log('Created temporary journal ID for file metadata:', tempJournalId);
 
-        // Skip DOCX to PDF conversion for now to simplify the process
-        // We'll just save the journal with the DOCX file path
-        console.log('Skipping DOCX to PDF conversion for debugging');
+        // Upload DOCX file to Google Drive
+        console.log('Uploading DOCX to Google Drive');
+        console.log('Google Drive Folder ID:', process.env.GOOGLE_DRIVE_FOLDER_ID);
+        console.log('Google Drive Credentials:');
+        console.log('- Client ID:', process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 10) + '...' : 'Not set');
+        console.log('- Client Secret:', process.env.GOOGLE_CLIENT_SECRET ? process.env.GOOGLE_CLIENT_SECRET.substring(0, 10) + '...' : 'Not set');
+        console.log('- Refresh Token:', process.env.GOOGLE_REFRESH_TOKEN ? process.env.GOOGLE_REFRESH_TOKEN.substring(0, 10) + '...' : 'Not set');
+
+        let docxUploadResult = null;
+        let docxUploadError = null;
+        try {
+            // Verify file exists before upload
+            await fsPromises.access(file.path, fs.constants.F_OK);
+            const stats = await fsPromises.stat(file.path);
+            console.log('DOCX file exists and is ready for upload, size:', stats.size, 'bytes');
+
+            // Attempt to upload to Google Drive
+            docxUploadResult = await uploadFile(
+                file.path,
+                file.filename,
+                process.env.GOOGLE_DRIVE_FOLDER_ID,
+                tempJournalId
+            );
+            console.log('DOCX file uploaded to Google Drive successfully:', docxUploadResult);
+        } catch (error) {
+            docxUploadError = error;
+            console.error('CRITICAL ERROR: Failed to upload DOCX to Google Drive:', error);
+            console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            // Don't throw here, we'll handle it later
+        }
+
+        // Upload PDF file to Google Drive if conversion was successful
+        let pdfUploadResult = null;
+        let pdfUploadError = null;
+        if (pdfPath) {
+            console.log('Uploading PDF to Google Drive');
+            try {
+                // Verify PDF file exists before upload
+                await fsPromises.access(pdfPath, fs.constants.F_OK);
+                const stats = await fsPromises.stat(pdfPath);
+                console.log('PDF file exists and is ready for upload, size:', stats.size, 'bytes');
+
+                const pdfFilename = path.basename(pdfPath);
+                pdfUploadResult = await uploadFile(
+                    pdfPath,
+                    pdfFilename,
+                    process.env.GOOGLE_DRIVE_FOLDER_ID,
+                    tempJournalId
+                );
+                console.log('PDF file uploaded to Google Drive successfully:', pdfUploadResult);
+            } catch (error) {
+                pdfUploadError = error;
+                console.error('Failed to upload PDF to Google Drive:', error);
+                console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+                // Continue even if PDF upload fails
+                console.warn('WARNING: PDF upload to Google Drive failed, but continuing with local file path only');
+            }
+        }
+
+        // Clean up local files after upload
+        await fsPromises.unlink(file.path).catch(e => console.error('Error deleting DOCX:', e));
+        if (pdfPath) {
+            await fsPromises.unlink(pdfPath).catch(e => console.error('Error deleting PDF:', e));
+        }
 
         // Create journal record
         let journal;
@@ -229,13 +354,28 @@ exports.uploadJournal = async (req, res) => {
             const authorArray = Array.isArray(authors) ? authors : (authors ? [authors] : []);
             const keywordArray = Array.isArray(keywords) ? keywords : (keywords ? [keywords] : []);
 
+            // Generate filenames for storage
+            const docxFilename = file.filename;
+            const pdfFilename = docxFilename.replace('.docx', '.pdf');
+
+            // Check if Google Drive upload was successful
+            if (docxUploadError) {
+                console.warn('WARNING: Google Drive upload failed, but continuing with local file paths only');
+                console.warn('Upload error:', docxUploadError.message);
+            }
+
             console.log('Creating journal with:', {
                 title,
                 abstract,
                 authors: authorArray,
                 keywords: keywordArray,
-                docxFilePath,
-                pdfFilePath
+                docxFileId: docxUploadResult?.id || null,
+                pdfFileId: pdfUploadResult?.id || null,
+                docxWebViewLink: docxUploadResult?.webViewLink || null,
+                pdfWebViewLink: pdfUploadResult?.webViewLink || null,
+                docxFilePath: docxFilename,
+                pdfFilePath: pdfFilename,
+                googleDriveUploadFailed: !!docxUploadError
             });
 
             journal = new Journal({
@@ -243,50 +383,55 @@ exports.uploadJournal = async (req, res) => {
                 abstract,
                 authors: authorArray,
                 keywords: keywordArray,
-                docxFilePath,
-                pdfFilePath,
+                // Store Google Drive file IDs if available
+                docxFileId: docxUploadResult?.id || null,
+                pdfFileId: pdfUploadResult?.id || null,
+                // Store Google Drive web view links if available
+                docxWebViewLink: docxUploadResult?.webViewLink || null,
+                pdfWebViewLink: pdfUploadResult?.webViewLink || null,
+                // Always store the filenames for backward compatibility
+                docxFilePath: docxFilename,
+                pdfFilePath: pdfFilename,
                 status: "published"
             });
 
             await journal.save();
-            console.log('Journal saved successfully');
+            console.log('Journal saved successfully with ID:', journal._id);
+
+            // Log a summary of the entire process
+            console.log('=== JOURNAL UPLOAD PROCESS SUMMARY ===');
+            console.log('Journal ID:', journal._id);
+            console.log('Title:', journal.title);
+            console.log('DOCX File ID:', journal.docxFileId || 'Not available');
+            console.log('PDF File ID:', journal.pdfFileId || 'Not available');
+            console.log('DOCX Web Link:', journal.docxWebViewLink || 'Not available');
+            console.log('PDF Web Link:', journal.pdfWebViewLink || 'Not available');
+            console.log('=== JOURNAL UPLOAD COMPLETED SUCCESSFULLY ===');
 
             // Send response after successful save
             return res.status(201).json({
-                message: "Journal uploaded successfully",
+                message: docxUploadError ? "Journal uploaded successfully but Google Drive upload failed" : "Journal uploaded successfully",
                 journal: {
+                    id: journal._id,
                     title: journal.title,
                     abstract: journal.abstract,
                     authors: journal.authors,
-                    status: journal.status
+                    status: journal.status,
+                    hasDocx: !!journal.docxFileId,
+                    hasPdf: !!journal.pdfFileId,
+                    docxLink: journal.docxWebViewLink || null,
+                    pdfLink: journal.pdfWebViewLink || null,
+                    googleDriveUploadFailed: !!docxUploadError,
+                    googleDriveError: docxUploadError ? docxUploadError.message : null
                 }
             });
         } catch (err) {
             console.error('Journal save error:', err);
-            // Get the full path for cleanup
-            // Handle the environment variable path correctly
-            let uploadDir;
-            if (process.env.DOCUMENT_STORAGE_PATH) {
-                // If it's a relative path starting with '../', resolve it relative to the current directory
-                if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-                    uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
-                } else {
-                    // Otherwise, use it as is or resolve it if it's a relative path
-                    uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
-                }
-            } else {
-                // Fallback to a default path
-                uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
-            }
-            const fullDocxPath = path.join(uploadDir, docxFilePath);
-            const fullPdfPath = path.join(uploadDir, pdfFilePath);
-
-            console.log('Cleaning up files:', {fullDocxPath, fullPdfPath});
-            await fsPromises.unlink(fullDocxPath).catch(e => console.error('Error deleting docx:', e));
-            await fsPromises.unlink(fullPdfPath).catch(e => console.error('Error deleting pdf:', e));
-            return res.status(500).json({ message: "Failed to save journal" });
+            // No local files to clean up since already deleted
+            return res.status(500).json({ message: "Failed to save journal", error: err.message });
         }
     } catch (error) {
+        console.error('=== JOURNAL UPLOAD PROCESS FAILED ===');
         console.error('Upload error:', error);
         console.error('Error stack:', error.stack);
         console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
@@ -296,48 +441,42 @@ exports.uploadJournal = async (req, res) => {
         console.log('Request file:', req.file);
         console.log('Request headers:', req.headers);
 
-        // Clean up files if they were created
+        // Clean up local file if it exists
         if (req.file?.path) {
             console.log('Cleaning up uploaded file:', req.file.path);
-            // Use the actual file path from multer
             await fsPromises.unlink(req.file.path).catch(e => console.error('Error deleting uploaded file:', e));
         }
-        if (typeof pdfFilePath !== 'undefined') {
-            // Get the full path for cleanup
-            // Handle the environment variable path correctly
-            let uploadDir;
-            if (process.env.DOCUMENT_STORAGE_PATH) {
-                // If it's a relative path starting with '../', resolve it relative to the current directory
-                if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-                    uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
-                } else {
-                    // Otherwise, use it as is or resolve it if it's a relative path
-                    uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
-                }
-            } else {
-                // Fallback to a default path
-                uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
-            }
-            const fullPdfPath = path.join(uploadDir, pdfFilePath);
-            console.log('Cleaning up PDF file:', fullPdfPath);
-            await fsPromises.unlink(fullPdfPath).catch(e => console.error('Error deleting pdf file:', e));
+
+        // Check for specific error types and provide better error messages
+        let errorMessage = "Failed to upload journal";
+        let statusCode = 500;
+
+        if (error.message && error.message.includes('File does not exist') || error.message.includes('cannot be accessed')) {
+            errorMessage = "File upload failed: The uploaded file could not be processed";
+            statusCode = 400;
+        } else if (error.message && error.message.includes('empty')) {
+            errorMessage = "File upload failed: The uploaded file is empty";
+            statusCode = 400;
+        } else if (error.message && error.message.includes('Google Drive')) {
+            errorMessage = "File upload failed: Could not upload to Google Drive";
         }
 
-        return res.status(500).json({
-            message: "Failed to upload journal",
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        return res.status(statusCode).json({
+            message: errorMessage,
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };
 
-// Get all journals
-exports.getJournals = async (req, res) => {
+// Get all journals with IDs and file paths only (new endpoint for verification)
+exports.getJournalsFileInfo = async (req, res) => {
     try {
-        const journals = await Journal.find().sort({ createdAt: -1 });
+        const journals = await Journal.find({}, { _id: 1, docxFilePath: 1, pdfFilePath: 1 }).sort({ createdAt: -1 });
         res.json(journals);
     } catch (error) {
         res.status(500).json({
-            message: "Failed to get journals",
+            message: "Failed to get journals file info",
             error: error.message
         });
     }
@@ -388,15 +527,45 @@ exports.deleteJournal = async (req, res) => {
             return res.status(404).json({ message: "Journal not found" });
         }
 
-        // Delete associated files
-        try {
-            await fsPromises.unlink(journal.docxFilePath);
-            await fsPromises.unlink(journal.pdfFilePath);
-        } catch (err) {
-            console.error("Error deleting files:", err);
+        // Delete associated local files if they exist
+        const uploadDir = getUploadDir();
+        if (journal.docxFilePath) {
+            const fullDocxPath = path.join(uploadDir, journal.docxFilePath);
+            await cleanupFiles(fullDocxPath, null);
         }
 
-        res.json({ message: "Journal deleted successfully" });
+        if (journal.pdfFilePath) {
+            const fullPdfPath = path.join(uploadDir, journal.pdfFilePath);
+            await cleanupFiles(null, fullPdfPath);
+        }
+
+        // Delete files from Google Drive
+        let deletedFromDrive = [];
+
+        if (journal.docxFileId) {
+            try {
+                await deleteFile(journal.docxFileId);
+                deletedFromDrive.push('DOCX');
+                console.log('Deleted DOCX file from Google Drive:', journal.docxFileId);
+            } catch (error) {
+                console.error('Error deleting DOCX from Google Drive:', error);
+            }
+        }
+
+        if (journal.pdfFileId) {
+            try {
+                await deleteFile(journal.pdfFileId);
+                deletedFromDrive.push('PDF');
+                console.log('Deleted PDF file from Google Drive:', journal.pdfFileId);
+            } catch (error) {
+                console.error('Error deleting PDF from Google Drive:', error);
+            }
+        }
+
+        res.json({
+            message: "Journal deleted successfully",
+            deletedFromDrive: deletedFromDrive.length > 0 ? deletedFromDrive : null
+        });
     } catch (error) {
         res.status(500).json({
             message: "Failed to delete journal",
@@ -404,6 +573,20 @@ exports.deleteJournal = async (req, res) => {
         });
     }
 };
+
+// Add the missing getJournals method
+exports.getJournals = async (req, res) => {
+    try {
+        const journals = await Journal.find().sort({ createdAt: -1 });
+        res.json(journals);
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to get journals",
+            error: error.message
+        });
+    }
+};
+
 
 // Search journals
 exports.searchJournals = async (req, res) => {

@@ -6,12 +6,13 @@ const {
 } = require('../controllers/journalDownloadController');
 const { validateJournalId } = require('../middleware/validateJournal');
 
-// Match frontend URL pattern exactly
+// Download PDF file from Google Drive
 router.get('/:id/download/pdf', 
     validateJournalId,
     downloadPdfFile
 );
 
+// Download DOCX file from Google Drive
 router.get('/:id/download/docx', 
     validateJournalId,
     downloadDocxFile

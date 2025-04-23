@@ -1,357 +1,306 @@
 const path = require('path');
-const fs = require('fs').promises;
+const fs = require('fs');
 const Journal = require('../models/Journal');
+const { downloadFile } = require('../utils/googleDrive');
 
-// Handle the environment variable path correctly
-let DOCUMENT_STORAGE_PATH;
-if (process.env.DOCUMENT_STORAGE_PATH) {
-    // If it's a relative path starting with '../', resolve it relative to the current directory
-    if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-        DOCUMENT_STORAGE_PATH = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH));
-    } else {
-        // Otherwise, use it as is or resolve it if it's a relative path
-        DOCUMENT_STORAGE_PATH = path.resolve(process.env.DOCUMENT_STORAGE_PATH);
-    }
-} else {
-    // Fallback to a default path
-    DOCUMENT_STORAGE_PATH = path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
-}
+async function streamFile(res, filePath, contentType, fileName, isTemp = false) {
+    console.log(`Streaming file: ${filePath}`);
+    console.log(`Content-Type: ${contentType}`);
+    console.log(`Filename: ${fileName}`);
+    console.log(`Is temporary file: ${isTemp}`);
 
-// Log the storage path for debugging
-console.log('Document storage path (absolute):', DOCUMENT_STORAGE_PATH);
-console.log('Environment variable value:', process.env.DOCUMENT_STORAGE_PATH);
+    try {
+        // Check if file exists and is readable
+        await fs.promises.access(filePath, fs.constants.R_OK);
 
-// Helper function to resolve file paths correctly
-const resolveFilePath = (relativePath) => {
-    // If the path is already absolute, use it directly
-    if (path.isAbsolute(relativePath)) {
-        console.log('Path is already absolute:', relativePath);
-        return relativePath;
-    }
+        // Get file stats
+        const stats = await fs.promises.stat(filePath);
+        console.log(`File size: ${stats.size} bytes`);
 
-    // Log the original path for debugging
-    console.log('Original path:', relativePath);
+        if (stats.size === 0) {
+            throw new Error('File is empty (0 bytes)');
+        }
 
-    // Extract the filename regardless of path format
-    const filename = path.basename(relativePath);
-    console.log('Extracted filename:', filename);
+        // Set headers
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Length', stats.size);
+        res.setHeader('Cache-Control', 'no-cache');
 
-    // Create an array of possible file locations to check
-    const possiblePaths = [
-        // Check in the main uploads/journals directory
-        path.resolve(path.join(DOCUMENT_STORAGE_PATH, filename)),
-        // Check in the backend/uploads/journals directory
-        path.resolve(path.join(__dirname, '..', 'uploads', 'journals', filename)),
-        // Check in the parent directory's uploads/journals
-        path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', filename))
-    ];
+        // Stream the file
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
 
-    // If the path includes 'uploads/journals' or 'uploads\journals', try that specific path first
-    if (relativePath.includes('uploads/journals') || relativePath.includes('uploads\\journals')) {
-        // For paths like 'uploads/journals/file.pdf' or '../uploads/journals/file.pdf'
-        let normalizedPath = relativePath.replace(/\.\.\//g, '').replace(/\//g, path.sep).replace(/\\\\/g, path.sep);
+        // Handle cleanup when streaming is done
+        fileStream.on('end', async () => {
+            console.log(`Finished streaming file: ${filePath}`);
 
-        // Add the specific path to the beginning of the array (highest priority)
-        possiblePaths.unshift(
-            path.resolve(path.join(__dirname, '..', '..', normalizedPath)),
-            path.resolve(path.join(__dirname, '..', normalizedPath))
-        );
-    }
-
-    // Check each path and return the first one that exists
-    for (const possiblePath of possiblePaths) {
-        try {
-            if (require('fs').existsSync(possiblePath)) {
-                console.log('File found at:', possiblePath);
-                return possiblePath;
+            // Delete temp files
+            if (isTemp) {
+                try {
+                    await fs.promises.unlink(filePath);
+                    console.log(`Deleted temp file: ${filePath}`);
+                } catch (err) {
+                    console.error('Error deleting temp file:', err);
+                }
             }
-        } catch (err) {
-            // Continue to the next path
+        });
+
+        // Handle errors
+        fileStream.on('error', (err) => {
+            console.error(`Error streaming file ${filePath}:`, err);
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Error streaming file', error: err.message });
+            }
+        });
+
+        // Handle response close/finish
+        res.on('close', () => {
+            fileStream.destroy();
+            console.log('Response closed, stream destroyed');
+        });
+    } catch (error) {
+        console.error(`Error preparing file ${filePath} for streaming:`, error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Error preparing file for download', error: error.message });
         }
     }
-
-    // If no file was found, return the default path (first in the array)
-    // This will likely fail later, but we need to return something
-    console.log('No file found, using default path:', possiblePaths[0]);
-    return possiblePaths[0];
-};
+}
 
 exports.downloadPdfFile = async (req, res) => {
+    console.log('\n\n🔴🔴🔴 DOWNLOAD PDF FILE REQUESTED 🔴🔴🔴');
+    console.log('Request received at:', new Date().toISOString());
+
     try {
         const journalId = req.params.id;
+        console.log('Journal ID:', journalId);
 
-        // Find the journal by ID
+        // Find the journal
         const journal = await Journal.findById(journalId);
         if (!journal) {
+            console.error('Journal not found with ID:', journalId);
             return res.status(404).json({ message: 'Journal not found' });
         }
 
-        // Use the stored PDF file path with our helper function
-        const filePath = resolveFilePath(journal.pdfFilePath);
-
-        console.log('Journal PDF path from DB:', journal.pdfFilePath);
-        console.log('Resolved PDF file path:', filePath);
-        console.log('Attempting to download PDF file');
-
-        try {
-            // Check if file exists
-            await fs.access(filePath);
-
-            // Extract filename from the path
-            const fileName = path.basename(filePath);
-
-            // Set headers for PDF download
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-
-            // Add CORS headers
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Access-Control-Allow-Methods', 'GET');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-            // Stream the file
-            res.sendFile(filePath, (err) => {
-                if (err) {
-                    console.error('Download error:', err);
-                    if (!res.headersSent) {
-                        res.status(500).json({ message: 'Error downloading file' });
-                    }
-                }
-            });
-        } catch (accessError) {
-            console.log('Direct file access failed, trying alternative methods');
-
-            // Try to find the file in common locations
-            const fileName = path.basename(journal.pdfFilePath);
-            const alternativePaths = [
-                path.join(DOCUMENT_STORAGE_PATH, fileName),
-                path.join(__dirname, '..', 'uploads', 'journals', fileName),
-                path.join(__dirname, '..', '..', 'uploads', 'journals', fileName)
-            ];
-
-            // Check each alternative path
-            let fileFound = false;
-            for (const altPath of alternativePaths) {
-                try {
-                    if (require('fs').existsSync(altPath)) {
-                        console.log('File found at alternative location:', altPath);
-
-                        // Set headers for PDF download
-                        res.setHeader('Content-Type', 'application/pdf');
-                        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-
-                        // Add CORS headers
-                        res.setHeader('Access-Control-Allow-Origin', '*');
-                        res.setHeader('Access-Control-Allow-Methods', 'GET');
-                        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-                        // Stream the file
-                        res.sendFile(altPath, (err) => {
-                            if (err) {
-                                console.error('Download error from alternative path:', err);
-                                if (!res.headersSent) {
-                                    res.status(500).json({ message: 'Error downloading file' });
-                                }
-                            }
-                        });
-
-                        fileFound = true;
-                        break;
-                    }
-                } catch (err) {
-                    // Continue to the next path
-                }
-            }
-
-            // If no alternative path worked, redirect to direct-file route as last resort
-            if (!fileFound) {
-                console.log('No alternative paths worked, redirecting to direct-file route');
-                res.redirect(`/direct-file/journals/${fileName}`);
-            }
-        }
-    } catch (error) {
-        console.error('File download error:', error);
-
-        // Log additional error details
-        console.error('Error details:', {
-            message: error.message,
-            code: error.code,
-            path: error.path
+        console.log('Journal found:', {
+            id: journal._id,
+            title: journal.title,
+            pdfFileId: journal.pdfFileId || 'Not set',
+            pdfFilePath: journal.pdfFilePath || 'Not set'
         });
 
-        if (error.code === 'ENOENT') {
-            return res.status(404).json({
-                message: 'File not found',
-                details: {
-                    journalId: req.params.id,
-                    path: error.path || 'Path not available'
-                }
-            });
+        // Try multiple methods to download the file
+        let downloadSuccess = false;
+
+        // Method 1: Try Google Drive if we have a file ID
+        if (journal.pdfFileId) {
+            try {
+                console.log('Method 1: Downloading PDF from Google Drive with ID:', journal.pdfFileId);
+                const tempDir = path.join(__dirname, '..', 'temp');
+                await fs.promises.mkdir(tempDir, { recursive: true });
+                const tempFilePath = path.join(tempDir, `${journal.pdfFileId}.pdf`);
+
+                await downloadFile(journal.pdfFileId, tempFilePath);
+                await streamFile(res, tempFilePath, 'application/pdf', `${journal.title}.pdf`, true);
+                downloadSuccess = true;
+                console.log('Successfully downloaded PDF from Google Drive');
+                return;
+            } catch (driveError) {
+                console.error('Failed to download from Google Drive:', driveError);
+                // Continue to next method
+            }
         }
 
-        res.status(500).json({ message: 'Server error during file download' });
+        // Method 2: Try local file path
+        if (!downloadSuccess && journal.pdfFilePath) {
+            try {
+                console.log('Method 2: Using local PDF file path:', journal.pdfFilePath);
+
+                // Try multiple possible locations for the file
+                const possiblePaths = [];
+
+                // Add path based on DOCUMENT_STORAGE_PATH if it exists
+                if (process.env.DOCUMENT_STORAGE_PATH) {
+                    if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                        const storagePath = process.env.DOCUMENT_STORAGE_PATH.replace(/^\.\.\//, '');
+                        possiblePaths.push(
+                            path.resolve(path.join(__dirname, '..', storagePath, path.basename(journal.pdfFilePath)))
+                        );
+                    } else {
+                        possiblePaths.push(
+                            path.resolve(path.join(process.env.DOCUMENT_STORAGE_PATH, path.basename(journal.pdfFilePath)))
+                        );
+                    }
+                }
+
+                // Add other possible paths
+                possiblePaths.push(
+                    path.resolve(path.join(__dirname, '..', 'uploads', 'journals', path.basename(journal.pdfFilePath))),
+                    path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', path.basename(journal.pdfFilePath))),
+                    path.resolve(path.join(__dirname, '..', '..', '..', 'uploads', 'journals', path.basename(journal.pdfFilePath)))
+                );
+
+                console.log('Looking for PDF file in these locations:', possiblePaths);
+
+                // Find the first path that exists
+                let filePath = null;
+                for (const possiblePath of possiblePaths) {
+                    if (fs.existsSync(possiblePath)) {
+                        filePath = possiblePath;
+                        break;
+                    }
+                }
+
+                if (!filePath) {
+                    console.error('PDF file not found in any of the possible locations');
+                    // Continue to next method
+                } else {
+                    console.log('PDF file found at:', filePath);
+                    await streamFile(res, filePath, 'application/pdf', `${journal.title}.pdf`, false);
+                    downloadSuccess = true;
+                    return;
+                }
+            } catch (localError) {
+                console.error('Failed to download from local path:', localError);
+                // Continue to next method
+            }
+        }
+
+        // If we get here, no file was found or all methods failed
+        if (!downloadSuccess) {
+            console.error('All download methods failed for PDF file');
+            return res.status(404).json({
+                message: 'No PDF file found for this journal',
+                journalId,
+                pdfFileId: journal.pdfFileId || 'Not set',
+                pdfFilePath: journal.pdfFilePath || 'Not set'
+            });
+        }
+    } catch (error) {
+        console.error('Error downloading PDF file:', error);
+        res.status(500).json({
+            message: 'Server error during PDF download',
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 };
 
 exports.downloadDocxFile = async (req, res) => {
+    console.log('\n\n🔴🔴🔴 DOWNLOAD DOCX FILE REQUESTED 🔴🔴🔴');
+    console.log('Request received at:', new Date().toISOString());
+
     try {
         const journalId = req.params.id;
+        console.log('Journal ID:', journalId);
 
-        // Find the journal by ID
+        // Find the journal
         const journal = await Journal.findById(journalId);
         if (!journal) {
+            console.error('Journal not found with ID:', journalId);
             return res.status(404).json({ message: 'Journal not found' });
         }
 
-        // Use the stored DOCX file path with our helper function
-        const filePath = resolveFilePath(journal.docxFilePath);
+        console.log('Journal found:', {
+            id: journal._id,
+            title: journal.title,
+            docxFileId: journal.docxFileId || 'Not set',
+            docxFilePath: journal.docxFilePath || 'Not set'
+        });
 
-        console.log('Journal DOCX path from DB:', journal.docxFilePath);
-        console.log('Resolved DOCX file path:', filePath);
-        console.log('Attempting to download DOCX file');
+        // Try multiple methods to download the file
+        let downloadSuccess = false;
 
-        try {
-            // Check if file exists
-            await fs.access(filePath);
+        // Method 1: Try Google Drive if we have a file ID
+        if (journal.docxFileId) {
+            try {
+                console.log('Method 1: Downloading DOCX from Google Drive with ID:', journal.docxFileId);
+                const tempDir = path.join(__dirname, '..', 'temp');
+                await fs.promises.mkdir(tempDir, { recursive: true });
+                const tempFilePath = path.join(tempDir, `${journal.docxFileId}.docx`);
 
-            // Extract filename from the path
-            const fileName = path.basename(filePath);
+                await downloadFile(journal.docxFileId, tempFilePath);
+                await streamFile(res, tempFilePath, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `${journal.title}.docx`, true);
+                downloadSuccess = true;
+                console.log('Successfully downloaded DOCX from Google Drive');
+                return;
+            } catch (driveError) {
+                console.error('Failed to download from Google Drive:', driveError);
+                // Continue to next method
+            }
+        }
 
-            // Set headers for DOCX download
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+        // Method 2: Try local file path
+        if (!downloadSuccess && journal.docxFilePath) {
+            try {
+                console.log('Method 2: Using local DOCX file path:', journal.docxFilePath);
 
-            // Add CORS headers
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Access-Control-Allow-Methods', 'GET');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+                // Try multiple possible locations for the file
+                const possiblePaths = [];
 
-            // Stream the file
-            res.sendFile(filePath, (err) => {
-                if (err) {
-                    console.error('Download error:', err);
-                    if (!res.headersSent) {
-                        res.status(500).json({ message: 'Error downloading file' });
+                // Add path based on DOCUMENT_STORAGE_PATH if it exists
+                if (process.env.DOCUMENT_STORAGE_PATH) {
+                    if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
+                        const storagePath = process.env.DOCUMENT_STORAGE_PATH.replace(/^\.\.\//, '');
+                        possiblePaths.push(
+                            path.resolve(path.join(__dirname, '..', storagePath, path.basename(journal.docxFilePath)))
+                        );
+                    } else {
+                        possiblePaths.push(
+                            path.resolve(path.join(process.env.DOCUMENT_STORAGE_PATH, path.basename(journal.docxFilePath)))
+                        );
                     }
                 }
-            });
-        } catch (accessError) {
-            console.log('Direct file access failed, trying alternative methods');
 
-            // Try to find the file in common locations
-            const fileName = path.basename(journal.docxFilePath);
-            const alternativePaths = [
-                path.join(DOCUMENT_STORAGE_PATH, fileName),
-                path.join(__dirname, '..', 'uploads', 'journals', fileName),
-                path.join(__dirname, '..', '..', 'uploads', 'journals', fileName)
-            ];
+                // Add other possible paths
+                possiblePaths.push(
+                    path.resolve(path.join(__dirname, '..', 'uploads', 'journals', path.basename(journal.docxFilePath))),
+                    path.resolve(path.join(__dirname, '..', '..', 'uploads', 'journals', path.basename(journal.docxFilePath))),
+                    path.resolve(path.join(__dirname, '..', '..', '..', 'uploads', 'journals', path.basename(journal.docxFilePath)))
+                );
 
-            // Check each alternative path
-            let fileFound = false;
-            for (const altPath of alternativePaths) {
-                try {
-                    if (require('fs').existsSync(altPath)) {
-                        console.log('File found at alternative location:', altPath);
+                console.log('Looking for DOCX file in these locations:', possiblePaths);
 
-                        // Set headers for DOCX download
-                        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-                        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-
-                        // Add CORS headers
-                        res.setHeader('Access-Control-Allow-Origin', '*');
-                        res.setHeader('Access-Control-Allow-Methods', 'GET');
-                        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-                        // Stream the file
-                        res.sendFile(altPath, (err) => {
-                            if (err) {
-                                console.error('Download error from alternative path:', err);
-                                if (!res.headersSent) {
-                                    res.status(500).json({ message: 'Error downloading file' });
-                                }
-                            }
-                        });
-
-                        fileFound = true;
+                // Find the first path that exists
+                let filePath = null;
+                for (const possiblePath of possiblePaths) {
+                    if (fs.existsSync(possiblePath)) {
+                        filePath = possiblePath;
                         break;
                     }
-                } catch (err) {
-                    // Continue to the next path
                 }
-            }
 
-            // If no alternative path worked, redirect to direct-file route as last resort
-            if (!fileFound) {
-                console.log('No alternative paths worked, redirecting to direct-file route');
-                res.redirect(`/direct-file/journals/${fileName}`);
+                if (!filePath) {
+                    console.error('DOCX file not found in any of the possible locations');
+                    // Continue to next method
+                } else {
+                    console.log('DOCX file found at:', filePath);
+                    await streamFile(res, filePath, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `${journal.title}.docx`, false);
+                    downloadSuccess = true;
+                    return;
+                }
+            } catch (localError) {
+                console.error('Failed to download from local path:', localError);
+                // Continue to next method
             }
         }
-    } catch (error) {
-        console.error('File download error:', error);
 
-        // Log additional error details
-        console.error('Error details:', {
-            message: error.message,
-            code: error.code,
-            path: error.path
-        });
-
-        if (error.code === 'ENOENT') {
+        // If we get here, no file was found or all methods failed
+        if (!downloadSuccess) {
+            console.error('All download methods failed for DOCX file');
             return res.status(404).json({
-                message: 'File not found',
-                details: {
-                    journalId: req.params.id,
-                    path: error.path || 'Path not available'
-                }
+                message: 'No DOCX file found for this journal',
+                journalId,
+                docxFileId: journal.docxFileId || 'Not set',
+                docxFilePath: journal.docxFilePath || 'Not set'
             });
         }
-
-        res.status(500).json({ message: 'Server error during file download' });
-    }
-};
-
-exports.readFileContent = async (req, res) => {
-    try {
-        const journalId = req.params.id;
-
-        // Find the journal by ID
-        const journal = await Journal.findById(journalId);
-        if (!journal) {
-            return res.status(404).json({ message: 'Journal not found' });
-        }
-
-        // Use the stored PDF file path with our helper function
-        const filePath = resolveFilePath(journal.pdfFilePath);
-
-        console.log('Journal PDF path from DB:', journal.pdfFilePath);
-        console.log('Resolved PDF file path:', filePath);
-        console.log('Attempting to read file content');
-
-        // Check if file exists
-        await fs.access(filePath);
-
-        // Stream the file content
-        res.sendFile(filePath);
     } catch (error) {
-        console.error('File read error:', error);
-
-        // Log additional error details
-        console.error('Error details:', {
-            message: error.message,
-            code: error.code,
-            path: error.path
+        console.error('Error downloading DOCX file:', error);
+        res.status(500).json({
+            message: 'Server error during DOCX download',
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
-
-        if (error.code === 'ENOENT') {
-            return res.status(404).json({
-                message: 'File not found',
-                details: {
-                    journalId: req.params.id,
-                    path: error.path || 'Path not available'
-                }
-            });
-        }
-
-        res.status(500).json({ message: 'Server error reading file' });
     }
 };

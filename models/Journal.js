@@ -8,10 +8,10 @@
 //     pdfFilePath: { type: String }, // Store generated PDF path
 //     keywords: [{ type: String }],
 //     publishedDate: { type: Date, default: Date.now },
-//     status: { 
-//         type: String, 
-//         enum: ["submitted", "reviewed", "accepted", "published"], 
-//         default: "submitted" 
+//     status: {
+//         type: String,
+//         enum: ["submitted", "reviewed", "accepted", "published"],
+//         default: "submitted"
 //     },
 // });
 
@@ -44,8 +44,18 @@ const JournalSchema = new mongoose.Schema({
     abstract: { type: String, required: true },
     authors: [{ type: String }],
 
-    docxFilePath: { type: String, required: true }, // Store Word file path
-    pdfFilePath: { type: String }, // Store generated PDF path
+    // Local file paths (for backward compatibility)
+    docxFilePath: { type: String },
+    pdfFilePath: { type: String },
+
+    // Google Drive file IDs
+    docxFileId: { type: String },
+    pdfFileId: { type: String },
+
+    // Google Drive public links
+    docxWebViewLink: { type: String },
+    pdfWebViewLink: { type: String },
+
     keywords: [{ type: String }],
     publishedDate: { type: Date, default: Date.now },
     status: { type: String, enum: ["submitted", "reviewed", "accepted", "published"], default: "published" },

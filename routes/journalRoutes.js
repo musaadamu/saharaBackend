@@ -5,6 +5,7 @@ const router = express.Router();
 
 // Upload journal route (no authentication required)
 router.post("/", (req, res, next) => {
+    console.log('journalRoutes POST / upload route invoked');
     journalController.uploadMiddleware(req, res, (err) => {
         if (err) {
             if (err.code === 'LIMIT_FILE_SIZE') {
@@ -27,6 +28,11 @@ router.post("/", (req, res, next) => {
 
 // Get all journals
 router.get("/", journalController.getJournals);
+
+console.log('journalController.getJournalsFileInfo:', journalController.getJournalsFileInfo);
+
+// Get journals file info (new route for verification)
+router.get("/file-info", journalController.getJournalsFileInfo);
 
 // Search journals
 router.get("/search", journalController.searchJournals);
