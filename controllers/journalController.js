@@ -142,9 +142,11 @@ const cleanupFiles = async (docxPath, pdfPath) => {
 
 exports.uploadMiddleware = upload.single('file');
 
-// Convert DOCX to PDF
+// Convert DOCX to PDF using mammoth HTML extraction and Puppeteer for better formatting
+const puppeteer = require('puppeteer');
+
 async function convertDocxToPdf(docxPath) {
-    console.log('=== PDF CONVERSION STARTED ===');
+    console.log('=== PDF CONVERSION STARTED (HTML + Puppeteer) ===');
     console.log('Converting DOCX to PDF:', docxPath);
     const pdfPath = docxPath.replace('.docx', '.pdf');
     console.log('Target PDF path:', pdfPath);
@@ -163,39 +165,48 @@ async function convertDocxToPdf(docxPath) {
             throw err;
         }
 
-        // Extract text from DOCX
-        console.log('Reading DOCX file for text extraction');
+        // Extract HTML from DOCX
+        console.log('Reading DOCX file for HTML extraction');
         const buffer = await fsPromises.readFile(docxPath);
         console.log('DOCX file read successfully, buffer size:', buffer.length, 'bytes');
 
-        console.log('Extracting text from DOCX...');
-        const extractedText = await mammoth.extractRawText({ buffer });
-        console.log('Text extracted successfully, length:', extractedText.value.length, 'characters');
+        console.log('Extracting HTML from DOCX...');
+        const extractedHtml = await mammoth.convertToHtml({ buffer });
+        console.log('HTML extracted successfully, length:', extractedHtml.value.length, 'characters');
 
-        if (extractedText.value.length === 0) {
-            console.error('ERROR: Extracted text is empty');
-            throw new Error('Extracted text is empty');
+        if (extractedHtml.value.length === 0) {
+            console.error('ERROR: Extracted HTML is empty');
+            throw new Error('Extracted HTML is empty');
         }
 
-        // Create PDF from extracted text
-        console.log('Creating PDF from extracted text');
-        await new Promise((resolve, reject) => {
-            const pdfDoc = new PDFDocument();
-            const pdfStream = fs.createWriteStream(pdfPath);
+        // Launch Puppeteer to render HTML to PDF
+        console.log('Launching Puppeteer to render PDF');
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
 
-            pdfDoc.pipe(pdfStream);
-            pdfDoc.text(extractedText.value);
-            pdfDoc.end();
+        // Set content with basic styling for better PDF appearance
+        const htmlContent = `
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    table { border-collapse: collapse; width: 100%; }
+                    th, td { border: 1px solid #ddd; padding: 8px; }
+                    th { background-color: #f2f2f2; text-align: left; }
+                    p, h1, h2, h3, h4, h5, h6 { margin: 0 0 10px 0; }
+                    .center { text-align: center; }
+                </style>
+            </head>
+            <body>
+                ${extractedHtml.value}
+            </body>
+            </html>
+        `;
 
-            pdfStream.on('finish', () => {
-                console.log('PDF creation completed');
-                resolve();
-            });
-            pdfStream.on('error', (err) => {
-                console.error('PDF creation error:', err);
-                reject(err);
-            });
-        });
+        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+        await page.pdf({ path: pdfPath, format: 'A4', printBackground: true });
+
+        await browser.close();
 
         // Verify PDF was created
         try {
