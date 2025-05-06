@@ -1,4 +1,3 @@
-
 const fs = require("fs");
 const fsPromises = require("fs").promises;
 const Journal = require("../models/Journal");
@@ -152,49 +151,109 @@ async function convertDocxToPdf(docxPath) {
     console.log('Target PDF path:', pdfPath);
 
     try {
-        // Check if DOCX file exists
-        try {
-            await fsPromises.access(docxPath, fs.constants.F_OK);
-            const stats = await fsPromises.stat(docxPath);
-            console.log('DOCX file exists, size:', stats.size, 'bytes');
-            if (stats.size === 0) {
-                throw new Error('DOCX file is empty (0 bytes)');
-            }
-        } catch (err) {
-            console.error('ERROR: DOCX file does not exist or cannot be accessed:', err);
-            throw err;
+        // Verify DOCX file
+        await fsPromises.access(docxPath, fs.constants.F_OK);
+        const stats = await fsPromises.stat(docxPath);
+        if (stats.size === 0) {
+            throw new Error('DOCX file is empty (0 bytes)');
         }
 
-        // Extract HTML from DOCX
-        console.log('Reading DOCX file for HTML extraction');
+        // Extract HTML with enhanced options
         const buffer = await fsPromises.readFile(docxPath);
-        console.log('DOCX file read successfully, buffer size:', buffer.length, 'bytes');
+        const extractionOptions = {
+            buffer,
+            convertImage: mammoth.images.imgElement(function(image) {
+                return {
+                    src: image.src,
+                    style: "max-width: 100%; height: auto;"
+                };
+            }),
+            styleMap: [
+                "p[style-name='Title'] => h1:fresh",
+                "p[style-name='Heading 1'] => h2:fresh",
+                "p[style-name='Heading 2'] => h3:fresh",
+                "p[style-name='Heading 3'] => h4:fresh",
+                "p[style-name='Center'] => p.center:fresh",
+                "table => table.doc-table:fresh",
+                "p[style-name='Table Contents'] => td:fresh",
+                "r[style-name='Strong'] => strong"
+            ]
+        };
 
-        console.log('Extracting HTML from DOCX...');
-        const extractedHtml = await mammoth.convertToHtml({ buffer });
-        console.log('HTML extracted successfully, length:', extractedHtml.value.length, 'characters');
+        const extractedHtml = await mammoth.convertToHtml(extractionOptions);
 
         if (extractedHtml.value.length === 0) {
-            console.error('ERROR: Extracted HTML is empty');
             throw new Error('Extracted HTML is empty');
         }
 
-        // Launch Puppeteer to render HTML to PDF
-        console.log('Launching Puppeteer to render PDF');
-        const browser = await puppeteer.launch();
+        // Launch Puppeteer with improved settings
+        const browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
         const page = await browser.newPage();
 
-        // Set content with basic styling for better PDF appearance
+        // Enhanced HTML template with better styling
         const htmlContent = `
             <html>
             <head>
                 <style>
-                    body { font-family: Arial, sans-serif; margin: 20px; }
-                    table { border-collapse: collapse; width: 100%; }
-                    th, td { border: 1px solid #ddd; padding: 8px; }
-                    th { background-color: #f2f2f2; text-align: left; }
-                    p, h1, h2, h3, h4, h5, h6 { margin: 0 0 10px 0; }
-                    .center { text-align: center; }
+                    @page {
+                        margin: 2.54cm;
+                        size: A4;
+                    }
+                    body {
+                        font-family: 'Times New Roman', Times, serif;
+                        font-size: 12pt;
+                        line-height: 1.5;
+                        margin: 0;
+                        padding: 0;
+                    }
+                    table.doc-table {
+                        border-collapse: collapse;
+                        width: 100%;
+                        margin: 10px 0;
+                        page-break-inside: avoid;
+                    }
+                    table.doc-table th,
+                    table.doc-table td {
+                        border: 1px solid #000;
+                        padding: 8px;
+                        text-align: left;
+                    }
+                    table.doc-table th {
+                        background-color: #f2f2f2;
+                        font-weight: bold;
+                    }
+                    h1, h2, h3, h4 {
+                        margin: 1em 0 0.5em;
+                        page-break-after: avoid;
+                    }
+                    p {
+                        margin: 0 0 0.5em;
+                        text-align: justify;
+                    }
+                    .center {
+                        text-align: center !important;
+                    }
+                    img {
+                        max-width: 100%;
+                        height: auto;
+                        display: block;
+                        margin: 1em auto;
+                    }
+                    ul, ol {
+                        padding-left: 2em;
+                        margin: 0.5em 0;
+                    }
+                    li {
+                        margin-bottom: 0.25em;
+                    }
+                    @media print {
+                        .page-break {
+                            page-break-before: always;
+                        }
+                    }
                 </style>
             </head>
             <body>
@@ -203,21 +262,32 @@ async function convertDocxToPdf(docxPath) {
             </html>
         `;
 
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-        await page.pdf({ path: pdfPath, format: 'A4', printBackground: true });
+        // Set content with improved PDF generation options
+        await page.setContent(htmlContent, { 
+            waitUntil: ['networkidle0', 'domcontentloaded']
+        });
+
+        // Generate PDF with enhanced settings
+        await page.pdf({
+            path: pdfPath,
+            format: 'A4',
+            printBackground: true,
+            margin: {
+                top: '2.54cm',
+                right: '2.54cm',
+                bottom: '2.54cm',
+                left: '2.54cm'
+            },
+            displayHeaderFooter: false,
+            preferCSSPageSize: true
+        });
 
         await browser.close();
 
-        // Verify PDF was created
-        try {
-            const pdfStats = await fsPromises.stat(pdfPath);
-            console.log('PDF created successfully at:', pdfPath, 'size:', pdfStats.size, 'bytes');
-            if (pdfStats.size === 0) {
-                throw new Error('Generated PDF file is empty (0 bytes)');
-            }
-        } catch (err) {
-            console.error('ERROR: PDF verification failed:', err);
-            throw err;
+        // Verify PDF creation
+        const pdfStats = await fsPromises.stat(pdfPath);
+        if (pdfStats.size === 0) {
+            throw new Error('Generated PDF file is empty (0 bytes)');
         }
 
         console.log('=== PDF CONVERSION COMPLETED SUCCESSFULLY ===');
@@ -225,7 +295,6 @@ async function convertDocxToPdf(docxPath) {
     } catch (error) {
         console.error('=== PDF CONVERSION FAILED ===');
         console.error('Failed to convert DOCX to PDF:', error);
-        console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
         throw new Error('Failed to convert DOCX to PDF: ' + error.message);
     }
 }
