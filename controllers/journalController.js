@@ -6,7 +6,16 @@ const path = require("path");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
 const mongoose = require("mongoose");
-const { uploadFile, deleteFile } = require("../utils/googleDrive");
+const cloudinary = require('cloudinary').v2;
+const { deleteFile } = require("../utils/googleDrive");
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'musaadamu',
+  api_key: process.env.CLOUDINARY_API_KEY || '118667176731122',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'QwRlt2-iT57X6GlbzTarDSA5soY',
+  secure: true,
+});
 
 // Helper function to get the upload directory path
 const getUploadDir = () => {
@@ -209,67 +218,67 @@ exports.uploadJournal = async (req, res) => {
         const tempJournalId = new mongoose.Types.ObjectId();
         console.log('Created temporary journal ID for file metadata:', tempJournalId);
 
-        // Upload PDF file to Google Drive
-        console.log('Uploading PDF to Google Drive');
+        // Upload PDF file to Cloudinary
+        console.log('Uploading PDF to Cloudinary');
         let pdfUploadResult = null;
         let pdfUploadError = null;
         try {
-            // Verify PDF file exists before upload
-            await fsPromises.access(pdfFile.path, fs.constants.F_OK);
             const pdfStats = await fsPromises.stat(pdfFile.path);
             console.log('PDF file exists and is ready for upload, size:', pdfStats.size, 'bytes');
 
-            pdfUploadResult = await uploadFile(
-                pdfFile.path,
-                pdfFile.filename,
-                process.env.GOOGLE_DRIVE_FOLDER_ID,
-                tempJournalId
-            );
-            console.log('PDF file uploaded to Google Drive successfully:', pdfUploadResult);
+            pdfUploadResult = await cloudinary.uploader.upload(pdfFile.path, {
+                folder: 'UploadFiles',
+                resource_type: 'raw',
+                public_id: `${Date.now()}-${pdfFile.filename}`,
+                use_filename: true,
+                unique_filename: false,
+                overwrite: true,
+            });
+            console.log('PDF file uploaded to Cloudinary successfully:', pdfUploadResult);
         } catch (error) {
             pdfUploadError = error;
-            console.error('Failed to upload PDF to Google Drive:', error);
+            console.error('Failed to upload PDF to Cloudinary:', error);
             console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
             // Continue even if PDF upload fails
-            console.warn('WARNING: PDF upload to Google Drive failed, but continuing with local file path only');
+            console.warn('WARNING: PDF upload to Cloudinary failed, but continuing with local file path only');
         }
 
-        // Upload DOCX file to Google Drive
-        console.log('Uploading DOCX to Google Drive');
+        // Upload DOCX file to Cloudinary
+        console.log('Uploading DOCX to Cloudinary');
         let docxUploadResult = null;
         let docxUploadError = null;
         try {
-            // Verify DOCX file exists before upload
-            await fsPromises.access(docxFile.path, fs.constants.F_OK);
             const docxStats = await fsPromises.stat(docxFile.path);
             console.log('DOCX file exists and is ready for upload, size:', docxStats.size, 'bytes');
 
-            docxUploadResult = await uploadFile(
-                docxFile.path,
-                docxFile.filename,
-                process.env.GOOGLE_DRIVE_FOLDER_ID,
-                tempJournalId
-            );
-            console.log('DOCX file uploaded to Google Drive successfully:', docxUploadResult);
+            docxUploadResult = await cloudinary.uploader.upload(docxFile.path, {
+                folder: 'UploadFiles',
+                resource_type: 'raw',
+                public_id: `${Date.now()}-${docxFile.filename}`,
+                use_filename: true,
+                unique_filename: false,
+                overwrite: true,
+            });
+            console.log('DOCX file uploaded to Cloudinary successfully:', docxUploadResult);
         } catch (error) {
             docxUploadError = error;
-            console.error('Failed to upload DOCX to Google Drive:', error);
+            console.error('Failed to upload DOCX to Cloudinary:', error);
             console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
             // Continue even if DOCX upload fails
-            console.warn('WARNING: DOCX upload to Google Drive failed, but continuing with local file path only');
+            console.warn('WARNING: DOCX upload to Cloudinary failed, but continuing with local file path only');
         }
 
-        // Clean up local files after upload only if Google Drive upload succeeded
+        // Clean up local files after upload only if Cloudinary upload succeeded
         if (!pdfUploadError) {
             await fsPromises.unlink(pdfFile.path).catch(e => console.error('Error deleting PDF:', e));
         } else {
-            console.warn('Local PDF file retained due to Google Drive upload failure:', pdfFile.filename);
+            console.warn('Local PDF file retained due to Cloudinary upload failure:', pdfFile.filename);
         }
 
         if (!docxUploadError) {
             await fsPromises.unlink(docxFile.path).catch(e => console.error('Error deleting DOCX:', e));
         } else {
-            console.warn('Local DOCX file retained due to Google Drive upload failure:', docxFile.filename);
+            console.warn('Local DOCX file retained due to Cloudinary upload failure:', docxFile.filename);
         }
 
         // Create journal record
@@ -285,10 +294,10 @@ exports.uploadJournal = async (req, res) => {
                 abstract,
                 authors: authorArray,
                 keywords: keywordArray,
-                docxFileId: docxUploadResult?.id || null,
-                pdfFileId: pdfUploadResult?.id || null,
-                docxWebViewLink: docxUploadResult?.webViewLink || null,
-                pdfWebViewLink: pdfUploadResult?.webViewLink || null,
+                docxFileId: docxUploadResult?.public_id || null,
+                pdfFileId: pdfUploadResult?.public_id || null,
+                docxWebViewLink: docxUploadResult?.secure_url || null,
+                pdfWebViewLink: pdfUploadResult?.secure_url || null,
                 docxFilePath: docxFile.filename,
                 pdfFilePath: pdfFile.filename,
                 status: "published"
@@ -299,12 +308,12 @@ exports.uploadJournal = async (req, res) => {
                 abstract,
                 authors: authorArray,
                 keywords: keywordArray,
-                // Store Google Drive file IDs if available
-                docxFileId: docxUploadResult?.id || null,
-                pdfFileId: pdfUploadResult?.id || null,
-                // Store Google Drive web view links if available
-                docxWebViewLink: docxUploadResult?.webViewLink || null,
-                pdfWebViewLink: pdfUploadResult?.webViewLink || null,
+                // Store Cloudinary public IDs if available
+                docxFileId: docxUploadResult?.public_id || null,
+                pdfFileId: pdfUploadResult?.public_id || null,
+                // Store Cloudinary secure URLs if available
+                docxWebViewLink: docxUploadResult?.secure_url || null,
+                pdfWebViewLink: pdfUploadResult?.secure_url || null,
                 // Store the filenames
                 docxFilePath: docxFile.filename,
                 pdfFilePath: pdfFile.filename,
