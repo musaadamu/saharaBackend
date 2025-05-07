@@ -62,29 +62,39 @@ console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('Backend URL:', process.env.NODE_ENV === 'production' ? 'https://saharabackend-v190.onrender.com' : `http://localhost:${PORT}`);
 console.log('Frontend URL:', process.env.NODE_ENV === 'production' ? 'https://sahara-journal-frontend.vercel.app' : 'http://localhost:3000');
 
-app.use(cors({
-    origin: function(origin, callback) {
-        // Allow requests with no origin (like mobile apps, curl, etc)
-        if (!origin) return callback(null, true);
+app.use((req, res, next) => {
+    // Custom CORS handling to allow credentials: false for download routes
+    const origin = req.headers.origin;
+    const isDownloadRoute = req.path.match(/^\/api\/journals\/.+\/download\/.+$/) || req.path.match(/^\/api\/submissions\/.+\/download\/.+$/);
 
-        // Check if the origin is in the allowed list
-        if (allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            console.log('CORS blocked origin:', origin);
-            // For development, allow all origins
-            if (process.env.NODE_ENV !== 'production') {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-    exposedHeaders: ['Authorization', 'Content-Disposition', 'Content-Type', 'Content-Length']
-}));
+    if (!origin) {
+        // Allow requests with no origin (like mobile apps, curl, etc)
+        res.header('Access-Control-Allow-Origin', '*');
+    } else if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+        res.header('Access-Control-Allow-Origin', origin);
+    } else {
+        console.log('CORS blocked origin:', origin);
+        return res.status(403).send('Not allowed by CORS');
+    }
+
+    // For download routes, set credentials to false to avoid CORS issues
+    if (isDownloadRoute) {
+        res.header('Access-Control-Allow-Credentials', 'false');
+    } else {
+        res.header('Access-Control-Allow-Credentials', 'true');
+    }
+
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,HEAD');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    res.header('Access-Control-Expose-Headers', 'Authorization, Content-Disposition, Content-Type, Content-Length');
+
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+
+    next();
+});
 
 // Add headers for all responses
 app.use((req, res, next) => {
@@ -136,6 +146,8 @@ app.use('/api/api/submissions', submissionDownloadRoutes);
 
 // Mount diagnostic routes
 app.use('/api/diagnostic', diagnosticRoutes);
+// Also mount at root level for easier access
+app.use('/diagnostic', diagnosticRoutes);
 
 // Serve static files from uploads directory
 // Handle the environment variable path correctly

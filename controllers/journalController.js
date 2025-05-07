@@ -65,17 +65,22 @@ const fileFilter = (req, file, cb) => {
         console.log('Filtering file:', file.originalname, file.mimetype);
         const extname = path.extname(file.originalname).toLowerCase();
         const mimetype = file.mimetype;
+
+        // Accept both DOCX and PDF files
         const isDocx = extname === '.docx' &&
             (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
              mimetype === 'application/docx' ||
              mimetype === 'application/vnd.ms-word');
 
-        if (isDocx) {
+        const isPdf = extname === '.pdf' &&
+            (mimetype === 'application/pdf');
+
+        if (isDocx || isPdf) {
             console.log('File accepted:', file.originalname);
             cb(null, true);
         } else {
             console.log('File rejected:', file.originalname, 'Mimetype:', mimetype, 'Extension:', extname);
-            cb(new Error('Only .docx files are allowed!'), false);
+            cb(new Error('Only .docx and .pdf files are allowed!'), false);
         }
     } catch (error) {
         console.error('Error in file filter:', error);
@@ -91,7 +96,7 @@ const upload = multer({
     fileFilter,
     limits: {
         fileSize: 50 * 1024 * 1024,
-        files: 1,
+        files: 2, // Allow up to 2 files (PDF and DOCX)
         parts: 50
     }
 });
@@ -139,165 +144,12 @@ const cleanupFiles = async (docxPath, pdfPath) => {
     }
 };
 
-exports.uploadMiddleware = upload.single('file');
+exports.uploadMiddleware = upload.fields([
+    { name: 'pdfFile', maxCount: 1 },
+    { name: 'docxFile', maxCount: 1 }
+]);
 
-// Convert DOCX to PDF using mammoth HTML extraction and Puppeteer for better formatting
-const puppeteer = require('puppeteer');
-
-async function convertDocxToPdf(docxPath) {
-    console.log('=== PDF CONVERSION STARTED (HTML + Puppeteer) ===');
-    console.log('Converting DOCX to PDF:', docxPath);
-    const pdfPath = docxPath.replace('.docx', '.pdf');
-    console.log('Target PDF path:', pdfPath);
-
-    try {
-        // Verify DOCX file
-        await fsPromises.access(docxPath, fs.constants.F_OK);
-        const stats = await fsPromises.stat(docxPath);
-        if (stats.size === 0) {
-            throw new Error('DOCX file is empty (0 bytes)');
-        }
-
-        // Extract HTML with enhanced options
-        const buffer = await fsPromises.readFile(docxPath);
-        const extractionOptions = {
-            buffer,
-            convertImage: mammoth.images.imgElement(function(image) {
-                return {
-                    src: image.src,
-                    style: "max-width: 100%; height: auto;"
-                };
-            }),
-            styleMap: [
-                "p[style-name='Title'] => h1:fresh",
-                "p[style-name='Heading 1'] => h2:fresh",
-                "p[style-name='Heading 2'] => h3:fresh",
-                "p[style-name='Heading 3'] => h4:fresh",
-                "p[style-name='Center'] => p.center:fresh",
-                "table => table.doc-table:fresh",
-                "p[style-name='Table Contents'] => td:fresh",
-                "r[style-name='Strong'] => strong"
-            ]
-        };
-
-        const extractedHtml = await mammoth.convertToHtml(extractionOptions);
-
-        if (extractedHtml.value.length === 0) {
-            throw new Error('Extracted HTML is empty');
-        }
-
-        // Launch Puppeteer with improved settings
-        const browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        const page = await browser.newPage();
-
-        // Enhanced HTML template with better styling
-        const htmlContent = `
-            <html>
-            <head>
-                <style>
-                    @page {
-                        margin: 2.54cm;
-                        size: A4;
-                    }
-                    body {
-                        font-family: 'Times New Roman', Times, serif;
-                        font-size: 12pt;
-                        line-height: 1.5;
-                        margin: 0;
-                        padding: 0;
-                    }
-                    table.doc-table {
-                        border-collapse: collapse;
-                        width: 100%;
-                        margin: 10px 0;
-                        page-break-inside: avoid;
-                    }
-                    table.doc-table th,
-                    table.doc-table td {
-                        border: 1px solid #000;
-                        padding: 8px;
-                        text-align: left;
-                    }
-                    table.doc-table th {
-                        background-color: #f2f2f2;
-                        font-weight: bold;
-                    }
-                    h1, h2, h3, h4 {
-                        margin: 1em 0 0.5em;
-                        page-break-after: avoid;
-                    }
-                    p {
-                        margin: 0 0 0.5em;
-                        text-align: justify;
-                    }
-                    .center {
-                        text-align: center !important;
-                    }
-                    img {
-                        max-width: 100%;
-                        height: auto;
-                        display: block;
-                        margin: 1em auto;
-                    }
-                    ul, ol {
-                        padding-left: 2em;
-                        margin: 0.5em 0;
-                    }
-                    li {
-                        margin-bottom: 0.25em;
-                    }
-                    @media print {
-                        .page-break {
-                            page-break-before: always;
-                        }
-                    }
-                </style>
-            </head>
-            <body>
-                ${extractedHtml.value}
-            </body>
-            </html>
-        `;
-
-        // Set content with improved PDF generation options
-        await page.setContent(htmlContent, { 
-            waitUntil: ['networkidle0', 'domcontentloaded']
-        });
-
-        // Generate PDF with enhanced settings
-        await page.pdf({
-            path: pdfPath,
-            format: 'A4',
-            printBackground: true,
-            margin: {
-                top: '2.54cm',
-                right: '2.54cm',
-                bottom: '2.54cm',
-                left: '2.54cm'
-            },
-            displayHeaderFooter: false,
-            preferCSSPageSize: true
-        });
-
-        await browser.close();
-
-        // Verify PDF creation
-        const pdfStats = await fsPromises.stat(pdfPath);
-        if (pdfStats.size === 0) {
-            throw new Error('Generated PDF file is empty (0 bytes)');
-        }
-
-        console.log('=== PDF CONVERSION COMPLETED SUCCESSFULLY ===');
-        return pdfPath;
-    } catch (error) {
-        console.error('=== PDF CONVERSION FAILED ===');
-        console.error('Failed to convert DOCX to PDF:', error);
-        throw new Error('Failed to convert DOCX to PDF: ' + error.message);
-    }
-}
+// Removed convertDocxToPdf function and puppeteer import as PDF conversion is no longer needed
 
 // Upload and convert DOCX to PDF
 exports.uploadJournal = async (req, res) => {
@@ -305,17 +157,16 @@ exports.uploadJournal = async (req, res) => {
         console.log('🔴🔴🔴 UPLOAD JOURNAL PROCESS STARTED - MODIFIED VERSION (TIMESTAMP: ' + new Date().toISOString() + ') 🔴🔴🔴');
         console.log('Upload journal request received');
         console.log('Request body:', req.body);
-        console.log('Uploaded file:', req.file ? 'File received' : 'No file received');
+        console.log('Uploaded files:', req.files ? 'Files received' : 'No files received');
         console.log('SERVER RESTART TEST - THIS LINE SHOULD APPEAR IN LOGS');
-        if (req.file) {
-            console.log('File details:', {
-                filename: req.file.filename,
-                originalname: req.file.originalname,
-                mimetype: req.file.mimetype,
-                size: req.file.size,
-                path: req.file.path
+
+        if (req.files) {
+            console.log('Files details:', {
+                pdfFile: req.files.pdfFile ? req.files.pdfFile[0].filename : 'Not provided',
+                docxFile: req.files.docxFile ? req.files.docxFile[0].filename : 'Not provided'
             });
         }
+
         console.log('Storage path:', process.env.DOCUMENT_STORAGE_PATH);
         console.log('Current directory:', __dirname);
         console.log('Google Drive Folder ID:', process.env.GOOGLE_DRIVE_FOLDER_ID);
@@ -325,11 +176,18 @@ exports.uploadJournal = async (req, res) => {
         console.log('- Refresh Token:', process.env.GOOGLE_REFRESH_TOKEN ? process.env.GOOGLE_REFRESH_TOKEN.substring(0, 10) + '...' : 'Not set');
 
         const { title, abstract } = req.body;
-        const file = req.file;
+        const pdfFile = req.files?.pdfFile?.[0];
+        const docxFile = req.files?.docxFile?.[0];
 
-        if (!file) {
-            console.log('No file uploaded');
-            return res.status(400).json({ message: "No file uploaded" });
+        // Validate files
+        if (!pdfFile) {
+            console.log('No PDF file uploaded');
+            return res.status(400).json({ message: "No PDF file uploaded" });
+        }
+
+        if (!docxFile) {
+            console.log('No DOCX file uploaded');
+            return res.status(400).json({ message: "No DOCX file uploaded" });
         }
 
         // Validate required fields
@@ -347,83 +205,71 @@ exports.uploadJournal = async (req, res) => {
         const keywords = processArrayData(req.body.keywords);
         console.log('Processed keywords:', keywords);
 
-        // Convert DOCX to PDF
-        let pdfPath = null;
-        try {
-            pdfPath = await convertDocxToPdf(file.path);
-            console.log('PDF generated at:', pdfPath);
-        } catch (error) {
-            console.error('PDF conversion failed:', error);
-            // Continue with upload even if PDF conversion fails
-        }
-
         // Create a temporary journal ID for file metadata
         const tempJournalId = new mongoose.Types.ObjectId();
         console.log('Created temporary journal ID for file metadata:', tempJournalId);
 
+        // Upload PDF file to Google Drive
+        console.log('Uploading PDF to Google Drive');
+        let pdfUploadResult = null;
+        let pdfUploadError = null;
+        try {
+            // Verify PDF file exists before upload
+            await fsPromises.access(pdfFile.path, fs.constants.F_OK);
+            const pdfStats = await fsPromises.stat(pdfFile.path);
+            console.log('PDF file exists and is ready for upload, size:', pdfStats.size, 'bytes');
+
+            pdfUploadResult = await uploadFile(
+                pdfFile.path,
+                pdfFile.filename,
+                process.env.GOOGLE_DRIVE_FOLDER_ID,
+                tempJournalId
+            );
+            console.log('PDF file uploaded to Google Drive successfully:', pdfUploadResult);
+        } catch (error) {
+            pdfUploadError = error;
+            console.error('Failed to upload PDF to Google Drive:', error);
+            console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            // Continue even if PDF upload fails
+            console.warn('WARNING: PDF upload to Google Drive failed, but continuing with local file path only');
+        }
+
         // Upload DOCX file to Google Drive
         console.log('Uploading DOCX to Google Drive');
-        console.log('Google Drive Folder ID:', process.env.GOOGLE_DRIVE_FOLDER_ID);
-        console.log('Google Drive Credentials:');
-        console.log('- Client ID:', process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 10) + '...' : 'Not set');
-        console.log('- Client Secret:', process.env.GOOGLE_CLIENT_SECRET ? process.env.GOOGLE_CLIENT_SECRET.substring(0, 10) + '...' : 'Not set');
-        console.log('- Refresh Token:', process.env.GOOGLE_REFRESH_TOKEN ? process.env.GOOGLE_REFRESH_TOKEN.substring(0, 10) + '...' : 'Not set');
-
         let docxUploadResult = null;
         let docxUploadError = null;
         try {
-            // Verify file exists before upload
-            await fsPromises.access(file.path, fs.constants.F_OK);
-            const stats = await fsPromises.stat(file.path);
-            console.log('DOCX file exists and is ready for upload, size:', stats.size, 'bytes');
+            // Verify DOCX file exists before upload
+            await fsPromises.access(docxFile.path, fs.constants.F_OK);
+            const docxStats = await fsPromises.stat(docxFile.path);
+            console.log('DOCX file exists and is ready for upload, size:', docxStats.size, 'bytes');
 
-            // Attempt to upload to Google Drive
             docxUploadResult = await uploadFile(
-                file.path,
-                file.filename,
+                docxFile.path,
+                docxFile.filename,
                 process.env.GOOGLE_DRIVE_FOLDER_ID,
                 tempJournalId
             );
             console.log('DOCX file uploaded to Google Drive successfully:', docxUploadResult);
         } catch (error) {
             docxUploadError = error;
-            console.error('CRITICAL ERROR: Failed to upload DOCX to Google Drive:', error);
+            console.error('Failed to upload DOCX to Google Drive:', error);
             console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-            // Don't throw here, we'll handle it later
+            // Continue even if DOCX upload fails
+            console.warn('WARNING: DOCX upload to Google Drive failed, but continuing with local file path only');
         }
 
-        // Upload PDF file to Google Drive if conversion was successful
-        let pdfUploadResult = null;
-        let pdfUploadError = null;
-        if (pdfPath) {
-            console.log('Uploading PDF to Google Drive');
-            try {
-                // Verify PDF file exists before upload
-                await fsPromises.access(pdfPath, fs.constants.F_OK);
-                const stats = await fsPromises.stat(pdfPath);
-                console.log('PDF file exists and is ready for upload, size:', stats.size, 'bytes');
-
-                const pdfFilename = path.basename(pdfPath);
-                pdfUploadResult = await uploadFile(
-                    pdfPath,
-                    pdfFilename,
-                    process.env.GOOGLE_DRIVE_FOLDER_ID,
-                    tempJournalId
-                );
-                console.log('PDF file uploaded to Google Drive successfully:', pdfUploadResult);
-            } catch (error) {
-                pdfUploadError = error;
-                console.error('Failed to upload PDF to Google Drive:', error);
-                console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-                // Continue even if PDF upload fails
-                console.warn('WARNING: PDF upload to Google Drive failed, but continuing with local file path only');
-            }
+        // Clean up local files after upload only if Google Drive upload succeeded
+        if (!pdfUploadError) {
+            await fsPromises.unlink(pdfFile.path).catch(e => console.error('Error deleting PDF:', e));
+        } else {
+            console.warn('Local PDF file retained due to Google Drive upload failure:', pdfFile.filename);
         }
 
-        // Clean up local files after upload
-        await fsPromises.unlink(file.path).catch(e => console.error('Error deleting DOCX:', e));
-        if (pdfPath) {
-            await fsPromises.unlink(pdfPath).catch(e => console.error('Error deleting PDF:', e));
+        if (!docxUploadError) {
+            await fsPromises.unlink(docxFile.path).catch(e => console.error('Error deleting DOCX:', e));
+        } else {
+            console.warn('Local DOCX file retained due to Google Drive upload failure:', docxFile.filename);
         }
 
         // Create journal record
@@ -434,16 +280,6 @@ exports.uploadJournal = async (req, res) => {
             const authorArray = Array.isArray(authors) ? authors : (authors ? [authors] : []);
             const keywordArray = Array.isArray(keywords) ? keywords : (keywords ? [keywords] : []);
 
-            // Generate filenames for storage
-            const docxFilename = file.filename;
-            const pdfFilename = docxFilename.replace('.docx', '.pdf');
-
-            // Check if Google Drive upload was successful
-            if (docxUploadError) {
-                console.warn('WARNING: Google Drive upload failed, but continuing with local file paths only');
-                console.warn('Upload error:', docxUploadError.message);
-            }
-
             console.log('Creating journal with:', {
                 title,
                 abstract,
@@ -453,9 +289,9 @@ exports.uploadJournal = async (req, res) => {
                 pdfFileId: pdfUploadResult?.id || null,
                 docxWebViewLink: docxUploadResult?.webViewLink || null,
                 pdfWebViewLink: pdfUploadResult?.webViewLink || null,
-                docxFilePath: docxFilename,
-                pdfFilePath: pdfFilename,
-                googleDriveUploadFailed: !!docxUploadError
+                docxFilePath: docxFile.filename,
+                pdfFilePath: pdfFile.filename,
+                status: "published"
             });
 
             journal = new Journal({
@@ -469,9 +305,9 @@ exports.uploadJournal = async (req, res) => {
                 // Store Google Drive web view links if available
                 docxWebViewLink: docxUploadResult?.webViewLink || null,
                 pdfWebViewLink: pdfUploadResult?.webViewLink || null,
-                // Always store the filenames for backward compatibility
-                docxFilePath: docxFilename,
-                pdfFilePath: pdfFilename,
+                // Store the filenames
+                docxFilePath: docxFile.filename,
+                pdfFilePath: pdfFile.filename,
                 status: "published"
             });
 
@@ -488,9 +324,19 @@ exports.uploadJournal = async (req, res) => {
             console.log('PDF Web Link:', journal.pdfWebViewLink || 'Not available');
             console.log('=== JOURNAL UPLOAD COMPLETED SUCCESSFULLY ===');
 
+            // Determine upload status message
+            let uploadMessage = "Journal uploaded successfully";
+            if (pdfUploadError && docxUploadError) {
+                uploadMessage = "Journal uploaded successfully but Google Drive uploads failed";
+            } else if (pdfUploadError) {
+                uploadMessage = "Journal uploaded successfully but PDF Google Drive upload failed";
+            } else if (docxUploadError) {
+                uploadMessage = "Journal uploaded successfully but DOCX Google Drive upload failed";
+            }
+
             // Send response after successful save
             return res.status(201).json({
-                message: docxUploadError ? "Journal uploaded successfully but Google Drive upload failed" : "Journal uploaded successfully",
+                message: uploadMessage,
                 journal: {
                     id: journal._id,
                     title: journal.title,
@@ -501,8 +347,9 @@ exports.uploadJournal = async (req, res) => {
                     hasPdf: !!journal.pdfFileId,
                     docxLink: journal.docxWebViewLink || null,
                     pdfLink: journal.pdfWebViewLink || null,
-                    googleDriveUploadFailed: !!docxUploadError,
-                    googleDriveError: docxUploadError ? docxUploadError.message : null
+                    googleDriveUploadFailed: !!(pdfUploadError || docxUploadError),
+                    googleDriveError: pdfUploadError || docxUploadError ?
+                        (pdfUploadError?.message || docxUploadError?.message) : null
                 }
             });
         } catch (err) {
@@ -518,13 +365,18 @@ exports.uploadJournal = async (req, res) => {
 
         // Log request information
         console.log('Request body:', req.body);
-        console.log('Request file:', req.file);
+        console.log('Request files:', req.files);
         console.log('Request headers:', req.headers);
 
-        // Clean up local file if it exists
-        if (req.file?.path) {
-            console.log('Cleaning up uploaded file:', req.file.path);
-            await fsPromises.unlink(req.file.path).catch(e => console.error('Error deleting uploaded file:', e));
+        // Clean up local files if they exist
+        if (req.files?.pdfFile?.[0]?.path) {
+            console.log('Cleaning up uploaded PDF file:', req.files.pdfFile[0].path);
+            await fsPromises.unlink(req.files.pdfFile[0].path).catch(e => console.error('Error deleting uploaded PDF file:', e));
+        }
+
+        if (req.files?.docxFile?.[0]?.path) {
+            console.log('Cleaning up uploaded DOCX file:', req.files.docxFile[0].path);
+            await fsPromises.unlink(req.files.docxFile[0].path).catch(e => console.error('Error deleting uploaded DOCX file:', e));
         }
 
         // Check for specific error types and provide better error messages
@@ -609,28 +461,18 @@ exports.deleteJournal = async (req, res) => {
 
         // Delete associated local files if they exist
         const uploadDir = getUploadDir();
-        if (journal.docxFilePath) {
-            const fullDocxPath = path.join(uploadDir, journal.docxFilePath);
-            await cleanupFiles(fullDocxPath, null);
-        }
-
         if (journal.pdfFilePath) {
             const fullPdfPath = path.join(uploadDir, journal.pdfFilePath);
             await cleanupFiles(null, fullPdfPath);
         }
 
+        if (journal.docxFilePath) {
+            const fullDocxPath = path.join(uploadDir, journal.docxFilePath);
+            await cleanupFiles(fullDocxPath, null);
+        }
+
         // Delete files from Google Drive
         let deletedFromDrive = [];
-
-        if (journal.docxFileId) {
-            try {
-                await deleteFile(journal.docxFileId);
-                deletedFromDrive.push('DOCX');
-                console.log('Deleted DOCX file from Google Drive:', journal.docxFileId);
-            } catch (error) {
-                console.error('Error deleting DOCX from Google Drive:', error);
-            }
-        }
 
         if (journal.pdfFileId) {
             try {
@@ -639,6 +481,16 @@ exports.deleteJournal = async (req, res) => {
                 console.log('Deleted PDF file from Google Drive:', journal.pdfFileId);
             } catch (error) {
                 console.error('Error deleting PDF from Google Drive:', error);
+            }
+        }
+
+        if (journal.docxFileId) {
+            try {
+                await deleteFile(journal.docxFileId);
+                deletedFromDrive.push('DOCX');
+                console.log('Deleted DOCX file from Google Drive:', journal.docxFileId);
+            } catch (error) {
+                console.error('Error deleting DOCX from Google Drive:', error);
             }
         }
 
@@ -654,7 +506,6 @@ exports.deleteJournal = async (req, res) => {
     }
 };
 
-// Add the missing getJournals method
 exports.getJournals = async (req, res) => {
     try {
         const journals = await Journal.find().sort({ createdAt: -1 });
@@ -666,6 +517,10 @@ exports.getJournals = async (req, res) => {
         });
     }
 };
+
+// Remove any backend endpoints related to DOCX download if present
+// Assuming there was a route or controller method for DOCX download, remove or comment it out here if found
+// Since no explicit DOCX download method was found in the current controller, no action needed here
 
 
 // Search journals

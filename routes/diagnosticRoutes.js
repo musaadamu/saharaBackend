@@ -357,6 +357,101 @@ router.post('/test-pdf-conversion', upload.single('file'), async (req, res) => {
     }
 });
 
+// Add a route to test Puppeteer PDF conversion
+router.post('/test-puppeteer-pdf', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        console.log('File uploaded for Puppeteer PDF conversion test:', req.file.path);
+
+        // Import puppeteer
+        const puppeteer = require('puppeteer');
+
+        // Convert DOCX to PDF using Puppeteer
+        const pdfPath = req.file.path.replace('.docx', '.pdf');
+
+        // Extract HTML from DOCX
+        const buffer = await fs.promises.readFile(req.file.path);
+        const result = await mammoth.convertToHtml({ buffer });
+
+        if (result.value.length === 0) {
+            throw new Error('Extracted HTML is empty');
+        }
+
+        console.log('HTML extraction successful, length:', result.value.length);
+
+        // Create a simple HTML document with the extracted content
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>Converted Document</title>
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        line-height: 1.5;
+                        margin: 2.54cm;
+                    }
+                </style>
+            </head>
+            <body>
+                ${result.value}
+            </body>
+            </html>
+        `;
+
+        // Launch browser and create PDF
+        console.log('Launching browser for PDF creation...');
+        const browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+
+        console.log('Creating PDF...');
+        await page.pdf({
+            path: pdfPath,
+            format: 'A4',
+            printBackground: true,
+            margin: {
+                top: '2.54cm',
+                right: '2.54cm',
+                bottom: '2.54cm',
+                left: '2.54cm'
+            }
+        });
+
+        await browser.close();
+        console.log('Browser closed, PDF created at:', pdfPath);
+
+        // Verify PDF was created
+        const pdfStats = await fs.promises.stat(pdfPath);
+        console.log('PDF file size:', pdfStats.size);
+
+        // Return success with file paths
+        res.json({
+            success: true,
+            docxPath: req.file.path,
+            pdfPath: pdfPath,
+            pdfSize: pdfStats.size,
+            message: 'Puppeteer PDF conversion successful'
+        });
+    } catch (error) {
+        console.error('Error in Puppeteer PDF conversion test:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Puppeteer PDF conversion failed',
+            error: error.message,
+            stack: error.stack
+        });
+    }
+});
+
 // Add a route to test Google Drive upload
 router.post('/test-drive-upload', upload.single('file'), async (req, res) => {
     console.log('\n\n🔴🔴🔴 TEST DRIVE UPLOAD ENDPOINT CALLED 🔴🔴🔴');
@@ -441,6 +536,96 @@ router.post('/test-drive-upload', upload.single('file'), async (req, res) => {
             stack: error.stack,
             details: JSON.stringify(error, Object.getOwnPropertyNames(error))
         });
+    }
+});
+
+// Add a route to test direct file download
+router.get('/test-direct-download/:journalId/:fileType', async (req, res) => {
+    try {
+        const { journalId, fileType } = req.params;
+        console.log(`Testing direct download for journal ${journalId}, file type ${fileType}`);
+
+        // Find the journal
+        const journal = await Journal.findById(journalId);
+        if (!journal) {
+            return res.status(404).json({ message: 'Journal not found' });
+        }
+
+        // Get file path based on type
+        let filePath;
+        if (fileType === 'pdf') {
+            filePath = journal.pdfFilePath;
+        } else if (fileType === 'docx') {
+            filePath = journal.docxFilePath;
+        } else {
+            return res.status(400).json({ message: 'Invalid file type' });
+        }
+
+        if (!filePath) {
+            return res.status(404).json({ message: `No ${fileType} file path found for this journal` });
+        }
+
+        console.log('Original file path:', filePath);
+
+        // Resolve the file path
+        const DOCUMENT_STORAGE_PATH = process.env.DOCUMENT_STORAGE_PATH
+            ? path.resolve(process.env.DOCUMENT_STORAGE_PATH)
+            : path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
+
+        // Try different possible paths
+        const possiblePaths = [
+            path.resolve(filePath), // Absolute path
+            path.join(DOCUMENT_STORAGE_PATH, path.basename(filePath)), // Storage path + filename
+            path.join(__dirname, '..', filePath), // Relative to server root
+            path.join(__dirname, '..', 'uploads', 'journals', path.basename(filePath)) // Default uploads folder
+        ];
+
+        let resolvedPath = null;
+        for (const testPath of possiblePaths) {
+            try {
+                await fs.promises.access(testPath, fs.constants.F_OK);
+                const stats = await fs.promises.stat(testPath);
+                if (stats.isFile() && stats.size > 0) {
+                    resolvedPath = testPath;
+                    break;
+                }
+            } catch (err) {
+                // File doesn't exist or can't be accessed, try next path
+            }
+        }
+
+        if (!resolvedPath) {
+            return res.status(404).json({ message: 'File not found in any of the possible locations' });
+        }
+
+        console.log('Resolved file path:', resolvedPath);
+
+        // Set appropriate content type
+        let contentType;
+        if (fileType === 'pdf') {
+            contentType = 'application/pdf';
+        } else if (fileType === 'docx') {
+            contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        }
+
+        // Set headers
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(resolvedPath)}"`);
+
+        // Stream the file
+        const fileStream = fs.createReadStream(resolvedPath);
+        fileStream.pipe(res);
+
+        // Handle errors
+        fileStream.on('error', (err) => {
+            console.error('Error streaming file:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Error streaming file', error: err.message });
+            }
+        });
+    } catch (error) {
+        console.error('Error in direct download test:', error);
+        res.status(500).json({ message: 'Error in direct download test', error: error.message });
     }
 });
 

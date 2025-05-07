@@ -21,44 +21,65 @@ async function streamFile(res, filePath, contentType, fileName, isTemp = false) 
             throw new Error('File is empty (0 bytes)');
         }
 
-        // Set headers
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Length', stats.size);
-        res.setHeader('Cache-Control', 'no-cache');
+        // Set headers with more robust error handling
+        try {
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+            res.setHeader('Content-Length', stats.size);
+            res.setHeader('Cache-Control', 'no-cache');
 
-        // Stream the file
-        const fileStream = fs.createReadStream(filePath);
-        fileStream.pipe(res);
+            // Add CORS headers to prevent issues
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        } catch (headerError) {
+            console.error('Error setting headers:', headerError);
+            // Continue anyway, as some headers might have been set successfully
+        }
 
-        // Handle cleanup when streaming is done
-        fileStream.on('end', async () => {
-            console.log(`Finished streaming file: ${filePath}`);
+        // Stream the file with improved error handling
+        try {
+            const fileStream = fs.createReadStream(filePath);
 
-            // Delete temp files
-            if (isTemp) {
-                try {
-                    await fs.promises.unlink(filePath);
-                    console.log(`Deleted temp file: ${filePath}`);
-                } catch (err) {
-                    console.error('Error deleting temp file:', err);
+            // Set up error handler before piping
+            fileStream.on('error', (err) => {
+                console.error(`Error streaming file ${filePath}:`, err);
+                if (!res.headersSent) {
+                    res.status(500).json({ message: 'Error streaming file', error: err.message });
+                } else if (!res.finished) {
+                    res.end();
                 }
-            }
-        });
+            });
 
-        // Handle errors
-        fileStream.on('error', (err) => {
-            console.error(`Error streaming file ${filePath}:`, err);
+            // Handle cleanup when streaming is done
+            fileStream.on('end', async () => {
+                console.log(`Finished streaming file: ${filePath}`);
+
+                // Delete temp files
+                if (isTemp) {
+                    try {
+                        await fs.promises.unlink(filePath);
+                        console.log(`Deleted temp file: ${filePath}`);
+                    } catch (err) {
+                        console.error('Error deleting temp file:', err);
+                    }
+                }
+            });
+
+            // Handle response close/finish
+            res.on('close', () => {
+                fileStream.destroy();
+                console.log('Response closed, stream destroyed');
+            });
+
+            // Now pipe the file to the response
+            fileStream.pipe(res);
+        } catch (streamError) {
+            console.error('Error creating read stream:', streamError);
             if (!res.headersSent) {
-                res.status(500).json({ message: 'Error streaming file', error: err.message });
+                res.status(500).json({ message: 'Error creating file stream', error: streamError.message });
             }
-        });
-
-        // Handle response close/finish
-        res.on('close', () => {
-            fileStream.destroy();
-            console.log('Response closed, stream destroyed');
-        });
+        }
     } catch (error) {
         console.error(`Error preparing file ${filePath} for streaming:`, error);
         if (!res.headersSent) {
