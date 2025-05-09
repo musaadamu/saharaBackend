@@ -5,15 +5,26 @@ const authMiddleware = require('../middleware/authMiddleware');
 
 // PDF download endpoint
 router.get(
-    '/pdf/:id',
+    '/:id/download/pdf',
     authMiddleware.protect,
     submissionDownloadController.downloadPdfFile
 );
 
 // DOCX download endpoint
 router.get(
-    '/docx/:id',
+    '/:id/download/docx',
     authMiddleware.protect,
+    submissionDownloadController.downloadDocxFile
+);
+
+// Direct download endpoints (no authentication required)
+router.get(
+    '/:id/direct-download/pdf',
+    submissionDownloadController.downloadPdfFile
+);
+
+router.get(
+    '/:id/direct-download/docx',
     submissionDownloadController.downloadDocxFile
 );
 
@@ -22,6 +33,19 @@ router.get(
     '/content/:id',
     authMiddleware.protect,
     submissionDownloadController.readFileContent
+);
+
+// Legacy endpoints for backward compatibility
+router.get(
+    '/pdf/:id',
+    authMiddleware.protect,
+    submissionDownloadController.downloadPdfFile
+);
+
+router.get(
+    '/docx/:id',
+    authMiddleware.protect,
+    submissionDownloadController.downloadDocxFile
 );
 
 module.exports = router;

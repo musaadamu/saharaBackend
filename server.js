@@ -12,6 +12,9 @@ const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
 
+// Import models
+const Journal = require('./models/Journal');
+
 // Middleware imports
 const { protect } = require('./middleware/authMiddleware');
 
@@ -85,7 +88,8 @@ app.use((req, res, next) => {
     }
 
     res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,HEAD');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    // Add 'cache-control' to allowed headers to fix CORS preflight error
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, cache-control');
     res.header('Access-Control-Expose-Headers', 'Authorization, Content-Disposition, Content-Type, Content-Length');
 
     // Handle preflight requests
@@ -96,26 +100,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Add headers for all responses
-app.use((req, res, next) => {
-    // Set the Access-Control-Allow-Origin header to the specific origin
-    const origin = req.headers.origin;
-    if (origin && (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production')) {
-        res.header('Access-Control-Allow-Origin', origin);
-    }
-
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,HEAD');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-    res.header('Access-Control-Expose-Headers', 'Authorization, Content-Disposition, Content-Type, Content-Length');
-
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
-    next();
-});
+// CORS middleware already defined above
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -539,18 +524,62 @@ app.get('/check-file/:journalId/:fileType', async (req, res) => {
             return res.status(404).json({ message: 'Journal not found' });
         }
 
+        // Check for Cloudinary URLs first
+        let cloudinaryUrl = null;
+        if (fileType === 'pdf') {
+            cloudinaryUrl = journal.pdfCloudinaryUrl || journal.pdfWebViewLink;
+        } else if (fileType === 'docx') {
+            cloudinaryUrl = journal.docxCloudinaryUrl || journal.docxWebViewLink;
+        } else {
+            return res.status(400).json({ message: 'Invalid file type' });
+        }
+
+        // If we have a Cloudinary URL, return success
+        if (cloudinaryUrl) {
+            console.log(`Found Cloudinary URL for ${fileType} file:`, cloudinaryUrl);
+
+            // For PDFs, provide multiple download URL options
+            let downloadUrl = cloudinaryUrl;
+
+            // Option 1: Use fl_attachment flag
+            if (fileType === 'pdf' && cloudinaryUrl.includes('/upload/') && !cloudinaryUrl.includes('fl_attachment')) {
+                downloadUrl = cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/');
+                console.log('Modified Cloudinary URL with fl_attachment:', downloadUrl);
+            }
+
+            // Option 2: Use Cloudinary's download URL format
+            let downloadUrl2 = null;
+            if (fileType === 'pdf' && cloudinaryUrl.includes('/upload/')) {
+                downloadUrl2 = cloudinaryUrl.replace('/upload/', '/download/');
+                console.log('Alternative Cloudinary download URL:', downloadUrl2);
+            }
+
+            return res.json({
+                exists: true,
+                journalId,
+                fileType,
+                cloudinaryUrl,
+                downloadUrl,
+                downloadUrl2,
+                message: `${fileType.toUpperCase()} file available on Cloudinary`
+            });
+        }
+
         // Get the file path based on file type
         let filePath;
         if (fileType === 'pdf') {
             filePath = journal.pdfFilePath;
         } else if (fileType === 'docx') {
             filePath = journal.docxFilePath;
-        } else {
-            return res.status(400).json({ message: 'Invalid file type' });
         }
 
         if (!filePath) {
-            return res.status(404).json({ message: `No ${fileType} file path found for this journal` });
+            return res.status(404).json({
+                exists: false,
+                message: `No ${fileType} file path found for this journal`,
+                journalId,
+                fileType
+            });
         }
 
         // Check possible file locations
@@ -571,9 +600,13 @@ app.get('/check-file/:journalId/:fileType', async (req, res) => {
 
         // Check each path
         const results = [];
+        let fileExists = false;
         for (const pathToCheck of possiblePaths) {
             try {
                 const exists = fs.existsSync(pathToCheck);
+                if (exists) {
+                    fileExists = true;
+                }
                 results.push({
                     path: pathToCheck,
                     exists
@@ -588,16 +621,34 @@ app.get('/check-file/:journalId/:fileType', async (req, res) => {
         }
 
         // Return the results
-        res.json({
-            journalId,
-            fileType,
-            filePath,
-            fileName: path.basename(filePath),
-            possiblePaths: results
-        });
+        if (fileExists) {
+            return res.json({
+                exists: true,
+                journalId,
+                fileType,
+                filePath,
+                fileName: path.basename(filePath),
+                possiblePaths: results,
+                message: `${fileType.toUpperCase()} file found in local storage`
+            });
+        } else {
+            return res.json({
+                exists: false,
+                journalId,
+                fileType,
+                filePath,
+                fileName: path.basename(filePath),
+                possiblePaths: results,
+                message: `${fileType.toUpperCase()} file not found in any location`
+            });
+        }
     } catch (err) {
         console.error('Error checking file:', err);
-        res.status(500).json({ message: 'Error checking file', error: err.message });
+        res.status(500).json({
+            exists: false,
+            message: 'Error checking file',
+            error: err.message
+        });
     }
 });
 

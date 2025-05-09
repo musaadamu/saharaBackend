@@ -1,21 +1,37 @@
 const express = require('express');
 const router = express.Router();
-const { 
-    downloadDocxFile, 
+const {
+    downloadDocxFile,
     downloadPdfFile
 } = require('../controllers/journalDownloadController');
+const {
+    directDownloadPdf,
+    directDownloadDocx
+} = require('../controllers/directDownloadController');
 const { validateJournalId } = require('../middleware/validateJournal');
 
 // Download PDF file from Google Drive
-router.get('/:id/download/pdf', 
+router.get('/:id/download/pdf',
     validateJournalId,
     downloadPdfFile
 );
 
 // Download DOCX file from Google Drive
-router.get('/:id/download/docx', 
+router.get('/:id/download/docx',
     validateJournalId,
     downloadDocxFile
+);
+
+// Direct download PDF file (bypasses Cloudinary access control)
+router.get('/:id/direct-download/pdf',
+    validateJournalId,
+    directDownloadPdf
+);
+
+// Direct download DOCX file (bypasses Cloudinary access control)
+router.get('/:id/direct-download/docx',
+    validateJournalId,
+    directDownloadDocx
 );
 
 // New endpoint to check if file exists for diagnostic purposes
@@ -43,10 +59,10 @@ router.get('/check-file/:id/:fileType', validateJournalId, async (req, res) => {
         const fs = require('fs');
 
         // Resolve absolute path similar to controller helper
-        const DOCUMENT_STORAGE_PATH = process.env.DOCUMENT_STORAGE_PATH 
-            ? (process.env.DOCUMENT_STORAGE_PATH.startsWith('../') 
-                ? path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH)) 
-                : path.resolve(process.env.DOCUMENT_STORAGE_PATH)) 
+        const DOCUMENT_STORAGE_PATH = process.env.DOCUMENT_STORAGE_PATH
+            ? (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')
+                ? path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH))
+                : path.resolve(process.env.DOCUMENT_STORAGE_PATH))
             : path.resolve(path.join(__dirname, '..', 'uploads', 'journals'));
 
         const resolveFilePath = (relativePath) => {

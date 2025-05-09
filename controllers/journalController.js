@@ -178,11 +178,6 @@ exports.uploadJournal = async (req, res) => {
 
         console.log('Storage path:', process.env.DOCUMENT_STORAGE_PATH);
         console.log('Current directory:', __dirname);
-        console.log('Google Drive Folder ID:', process.env.GOOGLE_DRIVE_FOLDER_ID);
-        console.log('Google Drive Credentials:');
-        console.log('- Client ID:', process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 10) + '...' : 'Not set');
-        console.log('- Client Secret:', process.env.GOOGLE_CLIENT_SECRET ? process.env.GOOGLE_CLIENT_SECRET.substring(0, 10) + '...' : 'Not set');
-        console.log('- Refresh Token:', process.env.GOOGLE_REFRESH_TOKEN ? process.env.GOOGLE_REFRESH_TOKEN.substring(0, 10) + '...' : 'Not set');
 
         const { title, abstract } = req.body;
         const pdfFile = req.files?.pdfFile?.[0];
@@ -233,6 +228,10 @@ exports.uploadJournal = async (req, res) => {
                 use_filename: true,
                 unique_filename: false,
                 overwrite: true,
+                access_mode: 'public',
+                type: 'upload',
+                accessibility: 'public',  // Ensure the file is publicly accessible
+                access_control: [{ access_type: 'anonymous' }]  // Allow anonymous access
             });
             console.log('PDF file uploaded to Cloudinary successfully:', pdfUploadResult);
         } catch (error) {
@@ -258,6 +257,10 @@ exports.uploadJournal = async (req, res) => {
                 use_filename: true,
                 unique_filename: false,
                 overwrite: true,
+                access_mode: 'public',
+                type: 'upload',
+                accessibility: 'public',  // Ensure the file is publicly accessible
+                access_control: [{ access_type: 'anonymous' }]  // Allow anonymous access
             });
             console.log('DOCX file uploaded to Cloudinary successfully:', docxUploadResult);
         } catch (error) {
@@ -314,6 +317,9 @@ exports.uploadJournal = async (req, res) => {
                 // Store Cloudinary secure URLs if available
                 docxWebViewLink: docxUploadResult?.secure_url || null,
                 pdfWebViewLink: pdfUploadResult?.secure_url || null,
+                // Store Cloudinary URLs explicitly
+                docxCloudinaryUrl: docxUploadResult?.secure_url || null,
+                pdfCloudinaryUrl: pdfUploadResult?.secure_url || null,
                 // Store the filenames
                 docxFilePath: docxFile.filename,
                 pdfFilePath: pdfFile.filename,
@@ -468,44 +474,12 @@ exports.deleteJournal = async (req, res) => {
             return res.status(404).json({ message: "Journal not found" });
         }
 
-        // Delete associated local files if they exist
-        const uploadDir = getUploadDir();
-        if (journal.pdfFilePath) {
-            const fullPdfPath = path.join(uploadDir, journal.pdfFilePath);
-            await cleanupFiles(null, fullPdfPath);
-        }
-
-        if (journal.docxFilePath) {
-            const fullDocxPath = path.join(uploadDir, journal.docxFilePath);
-            await cleanupFiles(fullDocxPath, null);
-        }
-
-        // Delete files from Google Drive
-        let deletedFromDrive = [];
-
-        if (journal.pdfFileId) {
-            try {
-                await deleteFile(journal.pdfFileId);
-                deletedFromDrive.push('PDF');
-                console.log('Deleted PDF file from Google Drive:', journal.pdfFileId);
-            } catch (error) {
-                console.error('Error deleting PDF from Google Drive:', error);
-            }
-        }
-
-        if (journal.docxFileId) {
-            try {
-                await deleteFile(journal.docxFileId);
-                deletedFromDrive.push('DOCX');
-                console.log('Deleted DOCX file from Google Drive:', journal.docxFileId);
-            } catch (error) {
-                console.error('Error deleting DOCX from Google Drive:', error);
-            }
-        }
+        // Delete files from Cloudinary if needed
+        // Note: Cloudinary has its own cleanup policies, so this is optional
+        // You can implement Cloudinary deletion here if needed
 
         res.json({
-            message: "Journal deleted successfully",
-            deletedFromDrive: deletedFromDrive.length > 0 ? deletedFromDrive : null
+            message: "Journal deleted successfully"
         });
     } catch (error) {
         res.status(500).json({

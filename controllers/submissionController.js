@@ -6,6 +6,14 @@ const path = require("path");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
 const mongoose = require("mongoose");
+const cloudinary = require("cloudinary").v2;
+
+// Configure Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -161,7 +169,7 @@ const validateSubmissionInput = (req) => {
     return errors;
 };
 
-// Upload and convert DOCX to PDF - follow the same approach as journalController
+// Upload and convert DOCX to PDF - using Cloudinary for storage
 exports.uploadSubmission = async (req, res) => {
     try {
         console.log('Upload submission request received');
@@ -287,6 +295,77 @@ exports.uploadSubmission = async (req, res) => {
             throw new Error('Failed to create PDF: ' + error.message);
         }
 
+        // Upload DOCX file to Cloudinary
+        console.log('Uploading DOCX to Cloudinary');
+        let docxUploadResult = null;
+        let docxUploadError = null;
+        try {
+            const docxStats = await fsPromises.stat(docxFilePath);
+            console.log('DOCX file exists and is ready for upload, size:', docxStats.size, 'bytes');
+
+            docxUploadResult = await cloudinary.uploader.upload(docxFilePath, {
+                folder: 'UploadFiles/Submissions',
+                resource_type: 'raw',
+                public_id: `${Date.now()}-${file.filename}`,
+                use_filename: true,
+                unique_filename: false,
+                overwrite: true,
+                access_mode: 'public',
+                type: 'upload',
+                accessibility: 'public',  // Ensure the file is publicly accessible
+                access_control: [{ access_type: 'anonymous' }]  // Allow anonymous access
+            });
+            console.log('DOCX file uploaded to Cloudinary successfully:', docxUploadResult);
+        } catch (error) {
+            docxUploadError = error;
+            console.error('Failed to upload DOCX to Cloudinary:', error);
+            console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            // Continue even if DOCX upload fails
+            console.warn('WARNING: DOCX upload to Cloudinary failed, but continuing with local file path only');
+        }
+
+        // Upload PDF file to Cloudinary
+        console.log('Uploading PDF to Cloudinary');
+        let pdfUploadResult = null;
+        let pdfUploadError = null;
+        try {
+            const pdfStats = await fsPromises.stat(pdfFilePath);
+            console.log('PDF file exists and is ready for upload, size:', pdfStats.size, 'bytes');
+
+            pdfUploadResult = await cloudinary.uploader.upload(pdfFilePath, {
+                folder: 'UploadFiles/Submissions',
+                resource_type: 'raw',
+                public_id: `${Date.now()}-${path.basename(pdfFilePath)}`,
+                use_filename: true,
+                unique_filename: false,
+                overwrite: true,
+                access_mode: 'public',
+                type: 'upload',
+                accessibility: 'public',  // Ensure the file is publicly accessible
+                access_control: [{ access_type: 'anonymous' }]  // Allow anonymous access
+            });
+            console.log('PDF file uploaded to Cloudinary successfully:', pdfUploadResult);
+        } catch (error) {
+            pdfUploadError = error;
+            console.error('Failed to upload PDF to Cloudinary:', error);
+            console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            // Continue even if PDF upload fails
+            console.warn('WARNING: PDF upload to Cloudinary failed, but continuing with local file path only');
+        }
+
+        // Clean up local files after upload only if Cloudinary upload succeeded
+        if (!docxUploadError) {
+            await fsPromises.unlink(docxFilePath).catch(e => console.error('Error deleting DOCX:', e));
+        } else {
+            console.warn('Local DOCX file retained due to Cloudinary upload failure:', file.filename);
+        }
+
+        if (!pdfUploadError) {
+            await fsPromises.unlink(pdfFilePath).catch(e => console.error('Error deleting PDF:', e));
+        } else {
+            console.warn('Local PDF file retained due to Cloudinary upload failure:', path.basename(pdfFilePath));
+        }
+
         // Process authors and keywords
         const processedAuthors = authors.map(author => author.trim()).filter(Boolean);
         const processedKeywords = keywords.map(kw => kw.trim()).filter(Boolean);
@@ -301,8 +380,18 @@ exports.uploadSubmission = async (req, res) => {
                 title: title.trim(),
                 abstract: abstract.trim(),
                 authors: processedAuthors,
-                docxFilePath,
-                pdfFilePath,
+                // Store local file paths for backward compatibility
+                docxFilePath: docxFilePath,
+                pdfFilePath: pdfFilePath,
+                // Store Cloudinary public IDs if available
+                docxFileId: docxUploadResult?.public_id || null,
+                pdfFileId: pdfUploadResult?.public_id || null,
+                // Store Cloudinary secure URLs if available
+                docxWebViewLink: docxUploadResult?.secure_url || null,
+                pdfWebViewLink: pdfUploadResult?.secure_url || null,
+                // Store Cloudinary URLs explicitly
+                docxCloudinaryUrl: docxUploadResult?.secure_url || null,
+                pdfCloudinaryUrl: pdfUploadResult?.secure_url || null,
                 keywords: processedKeywords,
                 status: "submitted",
             });
@@ -448,15 +537,37 @@ exports.deleteSubmission = async (req, res) => {
             return res.status(404).json({ message: "Submission not found" });
         }
 
+        // Delete local files if they exist
         try {
             if (submission.docxFilePath) {
-                await fsPromises.unlink(submission.docxFilePath);
+                await fsPromises.unlink(submission.docxFilePath).catch(e =>
+                    console.warn(`Could not delete local DOCX file: ${e.message}`)
+                );
             }
             if (submission.pdfFilePath) {
-                await fsPromises.unlink(submission.pdfFilePath);
+                await fsPromises.unlink(submission.pdfFilePath).catch(e =>
+                    console.warn(`Could not delete local PDF file: ${e.message}`)
+                );
             }
         } catch (fileError) {
-            console.warn("Could not delete associated files:", fileError);
+            console.warn("Could not delete associated local files:", fileError);
+        }
+
+        // Delete files from Cloudinary if they exist
+        try {
+            if (submission.docxFileId) {
+                await cloudinary.uploader.destroy(submission.docxFileId, { resource_type: 'raw' })
+                    .then(result => console.log('Deleted DOCX from Cloudinary:', result))
+                    .catch(error => console.error('Error deleting DOCX from Cloudinary:', error));
+            }
+
+            if (submission.pdfFileId) {
+                await cloudinary.uploader.destroy(submission.pdfFileId, { resource_type: 'raw' })
+                    .then(result => console.log('Deleted PDF from Cloudinary:', result))
+                    .catch(error => console.error('Error deleting PDF from Cloudinary:', error));
+            }
+        } catch (cloudinaryError) {
+            console.warn("Could not delete associated Cloudinary files:", cloudinaryError);
         }
 
         await submission.deleteOne();
