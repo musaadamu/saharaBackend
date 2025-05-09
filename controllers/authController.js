@@ -238,47 +238,122 @@ exports.forgotPassword = async (req, res) => {
     try {
         const email = req.body.email ? req.body.email.trim() : '';
 
+        // Validate email
+        if (!email) {
+            return res.status(400).json({ message: "Email is required" });
+        }
+
+        console.log(`Processing forgot password request for email: ${email}`);
+
         const user = await User.findOne({ email });
 
         if (!user) {
+            console.log(`User not found for email: ${email}`);
             return res.status(404).json({ message: "User not found" });
         }
+
+        console.log(`User found: ${user._id}. Generating reset token...`);
 
         // Use the model's method to generate reset token
         user.generatePasswordReset();
         await user.save({ validateBeforeSave: false });
 
+        console.log(`Reset token generated: ${user.resetPasswordToken}`);
+
+        // Check if email configuration exists
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            console.error("Email configuration missing. Check EMAIL_USER and EMAIL_PASS in .env file");
+            return res.status(500).json({
+                message: "Server configuration error. Please contact administrator.",
+                details: "Email configuration is missing"
+            });
+        }
+
+        // Check if client URL is configured
+        if (!process.env.CLIENT_URL) {
+            console.error("CLIENT_URL is missing in .env file");
+            return res.status(500).json({
+                message: "Server configuration error. Please contact administrator.",
+                details: "Client URL configuration is missing"
+            });
+        }
+
         // Email Configuration
+        console.log("Setting up email transport with nodemailer...");
         const transporter = nodemailer.createTransport({
             service: "Gmail",
-            auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
         });
 
-        const resetLink = `${process.env.CLIENT_URL}/reset-password/${user.resetPasswordToken}`;
+        const resetLink = `${process.env.CLIENT_URL}/resetpassword/${user.resetPasswordToken}`;
+        console.log(`Reset link generated: ${resetLink}`);
+
         const mailOptions = {
             to: user.email,
             from: process.env.EMAIL_USER,
-            subject: "Password Reset Request",
-            text: `Click the following link to reset your password: ${resetLink}`,
+            subject: "Sahara Journal - Password Reset Request",
+            text: `Hello ${user.name},\n\nYou requested a password reset for your Sahara Journal account.\n\nClick the following link to reset your password: ${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you did not request this, please ignore this email and your password will remain unchanged.\n\nRegards,\nThe Sahara Journal Team`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+                    <h2 style="color: #2563eb;">Sahara Journal Password Reset</h2>
+                    <p>Hello ${user.name},</p>
+                    <p>You requested a password reset for your Sahara Journal account.</p>
+                    <p>Click the button below to reset your password:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${resetLink}" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">Reset Password</a>
+                    </div>
+                    <p>Or copy and paste this link in your browser:</p>
+                    <p style="word-break: break-all; color: #4b5563;"><a href="${resetLink}">${resetLink}</a></p>
+                    <p>This link will expire in 1 hour.</p>
+                    <p>If you did not request this, please ignore this email and your password will remain unchanged.</p>
+                    <p>Regards,<br>The Sahara Journal Team</p>
+                </div>
+            `
         };
 
-        await transporter.sendMail(mailOptions);
-        res.json({ message: "Password reset link sent to email" });
+        console.log("Attempting to send email...");
+        try {
+            const info = await transporter.sendMail(mailOptions);
+            console.log("Email sent successfully:", info.messageId);
+            res.json({
+                message: "Password reset link sent to email",
+                details: "Please check your inbox and spam folder"
+            });
+        } catch (emailError) {
+            console.error("Email sending failed:", emailError);
+            // Save the token anyway so we can manually provide it if needed
+            res.status(500).json({
+                message: "Failed to send email. Please try again later or contact support.",
+                error: emailError.message
+            });
+        }
 
     } catch (error) {
         console.error("Forgot Password Error:", error);
-        res.status(500).json({ message: "Server error" });
+        res.status(500).json({
+            message: "Server error during password reset process",
+            error: error.message
+        });
     }
 };
 
 // Reset Password
 exports.resetPassword = async (req, res) => {
     try {
-        const token = req.body.token ? req.body.token.trim() : '';
-        const newPassword = req.body.newPassword || ''; // Don't trim password
+        console.log("Reset password request received:", req.params, req.body);
 
-        if (!token || !newPassword) {
-            return res.status(400).json({ message: "Token and new password are required" });
+        // Get token from params or body
+        const token = req.params.token || req.body.token || '';
+        const password = req.body.password || ''; // Don't trim password
+
+        console.log(`Processing reset password with token: ${token.substring(0, 10)}...`);
+
+        if (!token || !password) {
+            console.log("Missing required fields:", { hasToken: !!token, hasPassword: !!password });
+            return res.status(400).json({ message: "Token and password are required" });
         }
 
         // Find user with this token
@@ -288,21 +363,28 @@ exports.resetPassword = async (req, res) => {
         });
 
         if (!user) {
+            console.log("Invalid or expired token");
             return res.status(400).json({ message: "Invalid or expired reset token" });
         }
 
+        console.log(`Valid token found for user: ${user._id}`);
+
         // Update password - let pre-save hook handle hashing
-        user.password = newPassword;
+        user.password = password;
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
 
         await user.save();
+        console.log("Password reset successful");
 
         res.json({ message: "Password reset successful. You can now log in." });
 
     } catch (error) {
         console.error("Reset Password Error:", error);
-        res.status(500).json({ message: "Server error" });
+        res.status(500).json({
+            message: "Server error during password reset",
+            error: error.message
+        });
     }
 };
 
