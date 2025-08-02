@@ -50,55 +50,22 @@ app.use(morgan('dev'));
 // We'll handle multipart/form-data in the specific routes that need it
 // Removing global multer middleware to avoid conflicts with route-specific multer configurations
 
-// CORS Configuration for development and production
-const allowedOrigins = [
-    'http://localhost:3000',           // Local frontend development
-    'http://localhost:5000',           // Vite default port
-    'https://sahara-journal-frontend.vercel.app', // Production frontend
-    'https://sahara-journal.vercel.app'           // Alternative production frontend
-].filter(Boolean);
+// CORS Configuration using cors package
+const corsOptions = {
+    origin: [
+        'http://localhost:3000',           // Local frontend development
+        'http://localhost:5000',           // Vite default port
+        'https://sahara-journal-frontend.vercel.app', // Production frontend
+        'https://sahara-journal.vercel.app',           // Alternative production frontend
+        'https://www.sijtejournal.com.ng'              // Your new domain
+    ],
+    credentials: true,
+    optionsSuccessStatus: 200
+};
 
-console.log('Allowed CORS origins:', allowedOrigins);
+app.use(cors(corsOptions));
 
-// Log the current environment
-console.log('NODE_ENV:', process.env.NODE_ENV);
-console.log('Backend URL:', process.env.NODE_ENV === 'production' ? 'https://saharabackend-v190.onrender.com' : `http://localhost:${PORT}`);
-console.log('Frontend URL:', process.env.NODE_ENV === 'production' ? 'https://sahara-journal-frontend.vercel.app' : 'http://localhost:3000');
-
-app.use((req, res, next) => {
-    // Custom CORS handling to allow credentials: false for download routes
-    const origin = req.headers.origin;
-    const isDownloadRoute = req.path.match(/^\/api\/journals\/.+\/download\/.+$/) || req.path.match(/^\/api\/submissions\/.+\/download\/.+$/);
-
-    if (!origin) {
-        // Allow requests with no origin (like mobile apps, curl, etc)
-        res.header('Access-Control-Allow-Origin', '*');
-    } else if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
-        res.header('Access-Control-Allow-Origin', origin);
-    } else {
-        console.log('CORS blocked origin:', origin);
-        return res.status(403).send('Not allowed by CORS');
-    }
-
-    // For download routes, set credentials to false to avoid CORS issues
-    if (isDownloadRoute) {
-        res.header('Access-Control-Allow-Credentials', 'false');
-    } else {
-        res.header('Access-Control-Allow-Credentials', 'true');
-    }
-
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,HEAD');
-    // Add 'cache-control' to allowed headers to fix CORS preflight error
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, cache-control');
-    res.header('Access-Control-Expose-Headers', 'Authorization, Content-Disposition, Content-Type, Content-Length');
-
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
-    next();
-});
+console.log('CORS configured for origins:', corsOptions.origin);
 
 // CORS middleware already defined above
 
