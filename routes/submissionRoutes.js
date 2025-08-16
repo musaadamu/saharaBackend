@@ -2,30 +2,47 @@ const express = require('express');
 const router = express.Router();
 const submissionController = require('../controllers/submissionController');
 const { rateLimits, validationRules, handleValidationErrors } = require('../middleware/security');
+const { postUploadValidation } = require('../middleware/secureFileUpload');
 
-// Upload submission with file - use the same approach as journalRoutes
-router.post("/", (req, res, next) => {
-    submissionController.uploadMiddleware(req, res, (err) => {
-        if (err) {
-            console.error('Multer error in route handler:', err);
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(413).json({
-                    message: 'File too large. Max size is 50MB'
-                });
-            } else if (err.message.includes('Only .docx files are allowed')) {
-                return res.status(400).json({
-                    message: 'Invalid file type. Only .docx files are allowed'
+// Upload submission with enhanced security
+router.post("/",
+    rateLimits.upload,
+    (req, res, next) => {
+        submissionController.uploadMiddleware(req, res, (err) => {
+            if (err) {
+                console.error('Upload error in route handler:', err);
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(413).json({
+                        success: false,
+                        message: 'File too large. Max size is 50MB'
+                    });
+                } else if (err.message.includes('File type not allowed') ||
+                          err.message.includes('File extension not allowed')) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid file type. Only .docx files are allowed'
+                    });
+                } else if (err.message.includes('Suspicious file name')) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid file name detected'
+                    });
+                }
+                return res.status(500).json({
+                    success: false,
+                    message: 'File upload failed',
+                    error: err.message
                 });
             }
-            return res.status(500).json({
-                message: 'File upload failed',
-                error: err.message
-            });
-        }
-        console.log('File upload successful in route handler:', req.file);
-        next();
-    });
-}, submissionController.uploadSubmission);
+            console.log('File upload successful in route handler:', req.file);
+            next();
+        });
+    },
+    postUploadValidation,
+    validationRules.journalSubmission,
+    handleValidationErrors,
+    submissionController.uploadSubmission
+);
 
 // Test endpoint for file uploads
 router.post("/test-upload", (req, res, next) => {

@@ -1,12 +1,13 @@
 const fs = require("fs");
 const fsPromises = require("fs").promises;
 const Submission = require("../models/Submission");
-const multer = require("multer");
 const path = require("path");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
 const mongoose = require("mongoose");
 const cloudinary = require("cloudinary").v2;
+const { createSecureUpload } = require("../middleware/secureFileUpload");
+const { logSecurityEvent } = require("../middleware/errorHandler");
 
 // Configure Cloudinary
 cloudinary.config({
@@ -15,65 +16,7 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-    destination: async (req, file, cb) => {
-        // Use absolute path to avoid path resolution issues
-        let uploadDir;
-        if (process.env.DOCUMENT_STORAGE_PATH) {
-            // If it's a relative path starting with '../', resolve it relative to the current directory
-            if (process.env.DOCUMENT_STORAGE_PATH.startsWith('../')) {
-                uploadDir = path.resolve(path.join(__dirname, '..', process.env.DOCUMENT_STORAGE_PATH.replace('journals', 'submissions')));
-            } else {
-                // Otherwise, use it as is or resolve it if it's a relative path
-                uploadDir = path.resolve(process.env.DOCUMENT_STORAGE_PATH.replace('journals', 'submissions'));
-            }
-        } else {
-            // Fallback to a default path
-            uploadDir = path.resolve(path.join(__dirname, '..', 'uploads', 'submissions'));
-        }
-
-        console.log('Submission upload directory (absolute):', uploadDir);
-
-        try {
-            await fsPromises.mkdir(uploadDir, { recursive: true });
-            console.log('Submission upload directory created or already exists');
-            cb(null, uploadDir);
-        } catch (error) {
-            console.error('Error creating submission upload directory:', error);
-            cb(error, null);
-        }
-    },
-    filename: (req, file, cb) => {
-        const filename = `${Date.now()}-${file.originalname}`;
-        console.log('Generated filename for upload:', filename);
-        cb(null, filename);
-    },
-});
-
-// File filter to only allow .docx files
-const fileFilter = (req, file, cb) => {
-    const extname = path.extname(file.originalname).toLowerCase();
-    const mimetype = file.mimetype;
-    const isDocx = extname === '.docx' &&
-        (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-         mimetype === 'application/docx' ||
-         mimetype === 'application/vnd.ms-word');
-
-    if (isDocx) {
-        return cb(null, true);
-    } else {
-        cb(new Error('Only .docx files are allowed!'), false);
-    }
-};
-
-const upload = multer({
-    storage,
-    fileFilter,
-    limits: {
-        fileSize: 50 * 1024 * 1024 // 50MB file size limit
-    }
-});
+// Note: File upload configuration moved to middleware/secureFileUpload.js
 
 // Validation function
 const validateSubmissionInput = (req) => {
@@ -623,5 +566,5 @@ exports.searchSubmissions = async (req, res) => {
     }
 };
 
-// Use the same approach as journalController - direct multer middleware
-exports.uploadMiddleware = upload.single('file');
+// Use secure upload middleware for submissions
+exports.uploadMiddleware = createSecureUpload('submissions');

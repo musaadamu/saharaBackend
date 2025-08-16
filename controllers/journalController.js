@@ -50,66 +50,7 @@ const ensureUploadsDir = async () => {
     }
 };
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-    destination: async (req, file, cb) => {
-        const uploadDir = getUploadDir();
-        console.log('Upload directory (absolute):', uploadDir);
-        try {
-            // Create the directory with recursive option to create parent directories if they don't exist
-            await fsPromises.mkdir(uploadDir, { recursive: true });
-            console.log('Upload directory created or already exists');
-            cb(null, uploadDir);
-        } catch (error) {
-            console.error('Error creating upload directory:', error);
-            cb(error, null);
-        }
-    },
-    filename: (req, file, cb) => {
-        cb(null, `${Date.now()}-${file.originalname}`);
-    },
-});
-
-const fileFilter = (req, file, cb) => {
-    try {
-        console.log('Filtering file:', file.originalname, file.mimetype);
-        const extname = path.extname(file.originalname).toLowerCase();
-        const mimetype = file.mimetype;
-
-        // Accept both DOCX and PDF files
-        const isDocx = extname === '.docx' &&
-            (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-             mimetype === 'application/docx' ||
-             mimetype === 'application/vnd.ms-word');
-
-        const isPdf = extname === '.pdf' &&
-            (mimetype === 'application/pdf');
-
-        if (isDocx || isPdf) {
-            console.log('File accepted:', file.originalname);
-            cb(null, true);
-        } else {
-            console.log('File rejected:', file.originalname, 'Mimetype:', mimetype, 'Extension:', extname);
-            cb(new Error('Only .docx and .pdf files are allowed!'), false);
-        }
-    } catch (error) {
-        console.error('Error in file filter:', error);
-        cb(error, false);
-    }
-};
-
-// Call this function to ensure the directory exists
-ensureUploadsDir();
-
-const upload = multer({
-    storage,
-    fileFilter,
-    limits: {
-        fileSize: 50 * 1024 * 1024,
-        files: 2, // Allow up to 2 files (PDF and DOCX)
-        parts: 50
-    }
-});
+// Note: File upload configuration moved to middleware/secureFileUpload.js
 
 // Helper function to process array data from form
 const processArrayData = (data) => {

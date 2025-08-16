@@ -23,7 +23,7 @@
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.6.1",
     "cookie-parser": "^1.4.7",
-    "cores": "^0.8.5",
+    "cores": "^0.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
