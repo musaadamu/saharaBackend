@@ -12,6 +12,21 @@ const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
 
+// Security middleware imports
+const {
+    rateLimits,
+    securityHeaders,
+    sanitizeInput,
+    hpp
+} = require('./middleware/security');
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const {
+    sanitizeMongoQuery,
+    databaseSecurityMiddleware,
+    getSecureConnectionOptions,
+    createDatabaseRateLimit
+} = require('./middleware/databaseSecurity');
+
 // Import models
 const Journal = require('./models/Journal');
 
@@ -42,25 +57,68 @@ const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 console.log(`Environment: ${isProduction ? 'Production' : 'Development'}`);
 
-// Middleware setup
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
-app.use(morgan('dev'));
+// Security middleware setup (MUST be first)
+app.use(securityHeaders);
+app.use(hpp);
+app.use(rateLimits.general);
+
+// Trust proxy for rate limiting behind reverse proxy
+app.set('trust proxy', 1);
+
+// Body parsing middleware with security limits
+app.use(bodyParser.json({
+    limit: '10mb',
+    verify: (req, res, buf) => {
+        // Store raw body for webhook verification if needed
+        req.rawBody = buf;
+    }
+}));
+app.use(bodyParser.urlencoded({
+    extended: true,
+    limit: '10mb',
+    parameterLimit: 100
+}));
+
+// Input sanitization (after body parsing)
+app.use(sanitizeInput);
+
+// Database security middleware
+app.use(sanitizeMongoQuery);
+app.use(databaseSecurityMiddleware);
+app.use(createDatabaseRateLimit());
+
+// Logging middleware
+app.use(morgan(isProduction ? 'combined' : 'dev'));
 
 // We'll handle multipart/form-data in the specific routes that need it
 // Removing global multer middleware to avoid conflicts with route-specific multer configurations
 
-// CORS Configuration using cors package
+// Enhanced CORS Configuration with security
 const corsOptions = {
-    origin: [
-        'http://localhost:3000',           // Local frontend development
-        'http://localhost:5000',           // Vite default port
-        'https://sahara-journal-frontend.vercel.app', // Production frontend
-        'https://sahara-journal.vercel.app',           // Alternative production frontend
-        'https://www.sijtejournal.com.ng'              // Your new domain
-    ],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, etc.)
+        if (!origin) return callback(null, true);
+
+        const allowedOrigins = [
+            'http://localhost:3000',           // Local frontend development
+            'http://localhost:5000',           // Vite default port
+            'https://sahara-journal-frontend.vercel.app', // Production frontend
+            'https://sahara-journal.vercel.app',           // Alternative production frontend
+            'https://www.sijtejournal.com.ng'              // Your new domain
+        ];
+
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        } else {
+            return callback(new Error('Not allowed by CORS policy'));
+        }
+    },
     credentials: true,
-    optionsSuccessStatus: 200
+    optionsSuccessStatus: 200,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Disposition'],
+    maxAge: 86400 // 24 hours
 };
 
 app.use(cors(corsOptions));
@@ -692,13 +750,7 @@ const connectDB = async () => {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
 
-        await mongoose.connect(process.env.MONGODB_URI, {
-            serverSelectionTimeoutMS: 10000,
-            socketTimeoutMS: 45000,
-            retryWrites: true,
-            retryReads: true,
-            maxPoolSize: 10,
-        });
+        await mongoose.connect(process.env.MONGODB_URI, getSecureConnectionOptions());
 
         console.log('✅ MongoDB connected successfully');
         console.log(`MongoDB URI: ${process.env.MONGODB_URI.substring(0, 20)}...`);
@@ -722,20 +774,11 @@ process.on('SIGINT', () => {
     });
 });
 
-// Enhanced error handling
-app.use((err, req, res, next) => {
-    console.error(err.stack);
+// 404 handler for undefined routes
+app.use(notFoundHandler);
 
-    if (req.accepts('json')) {
-        res.status(500).json({
-            success: false,
-            message: 'Server Error',
-            error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error'
-        });
-    } else {
-        res.status(500).send('Internal Server Error');
-    }
-});
+// Enhanced security-focused error handling
+app.use(errorHandler);
 
 // Start the server
 connectDB();

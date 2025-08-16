@@ -94,54 +94,95 @@ exports.register = async (req, res) => {
     }
 };
 
-// Login User
+// Login User with enhanced security
 exports.login = async (req, res) => {
     try {
-        // Preserve original password for comparison
-        const email = req.body.email ? req.body.email.trim() : '';
-        const password = req.body.password || ''; // Don't trim password for login
+        const { email, password } = req.body;
 
         console.log("Login attempt for email:", email);
 
-        const user = await User.findOne({ email });
+        // Find user and include password for comparison
+        const user = await User.findOne({ email }).select('+password');
 
         if (!user) {
             console.log("❌ User not found with email:", email);
-            return res.status(401).json({ message: "Invalid email or password" });
+            return res.status(401).json({
+                success: false,
+                message: "Invalid email or password"
+            });
+        }
+
+        // Check if account is locked
+        if (user.isLocked) {
+            console.log("❌ Account locked for user:", email);
+            return res.status(423).json({
+                success: false,
+                message: "Account temporarily locked due to too many failed login attempts. Please try again later."
+            });
+        }
+
+        // Check if account is active
+        if (!user.isActive) {
+            console.log("❌ Account deactivated for user:", email);
+            return res.status(401).json({
+                success: false,
+                message: "Account has been deactivated. Please contact support."
+            });
         }
 
         console.log("✅ Found user:", user.email);
 
-        // Compare password with the hash stored in database
-        const isPasswordValid = await bcrypt.compare(password, user.password);
+        // Compare password using the model method
+        const isPasswordValid = await user.comparePassword(password);
 
         if (!isPasswordValid) {
             console.log("❌ Password mismatch for user:", user.email);
-            return res.status(401).json({ message: "Invalid email or password" });
+
+            // Increment failed login attempts
+            await user.incLoginAttempts();
+
+            return res.status(401).json({
+                success: false,
+                message: "Invalid email or password"
+            });
         }
 
         console.log("✅ Password matched!");
 
+        // Reset login attempts on successful login
+        await user.resetLoginAttempts();
+
         const token = generateToken(user);
 
-        // Set token in HTTP-only cookie
+        // Set secure token in HTTP-only cookie
         res.cookie("token", token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
-            sameSite: "Strict",
+            sameSite: process.env.NODE_ENV === "production" ? "None" : "Strict",
             maxAge: 24 * 60 * 60 * 1000, // 1 day
         });
 
-        // Send structured response for Redux
+        // Send structured response (exclude password)
         res.json({
+            success: true,
             message: "Login successful",
-            user: { id: user._id, name: user.name, email: user.email, role: user.role },
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                lastLogin: user.lastLogin
+            },
             token,
         });
 
     } catch (error) {
         console.error("Login Error:", error);
-        res.status(500).json({ message: "Server error", error: error.message });
+        res.status(500).json({
+            success: false,
+            message: "Server error during login",
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
     }
 };
 

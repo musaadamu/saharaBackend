@@ -1,13 +1,14 @@
 const fs = require("fs");
 const fsPromises = require("fs").promises;
 const Journal = require("../models/Journal");
-const multer = require("multer");
 const path = require("path");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
 const mongoose = require("mongoose");
 const cloudinary = require('cloudinary').v2;
 const { deleteFile } = require("../utils/googleDrive");
+const { createSecureUpload, postUploadValidation } = require("../middleware/secureFileUpload");
+const { logSecurityEvent } = require("../middleware/errorHandler");
 
 // Configure Cloudinary
 cloudinary.config({
@@ -153,7 +154,8 @@ const cleanupFiles = async (docxPath, pdfPath) => {
     }
 };
 
-exports.uploadMiddleware = upload.fields([
+// Use secure upload middleware
+exports.uploadMiddleware = createSecureUpload('journals', [
     { name: 'pdfFile', maxCount: 1 },
     { name: 'docxFile', maxCount: 1 }
 ]);
@@ -506,27 +508,58 @@ exports.getJournals = async (req, res) => {
 // Since no explicit DOCX download method was found in the current controller, no action needed here
 
 
-// Search journals
+// Search journals with enhanced security
 exports.searchJournals = async (req, res) => {
     try {
-        const { query } = req.query;
+        const { query, field = 'all' } = req.query;
+
         if (!query) {
-            return res.status(400).json({ message: "Search query is required" });
+            return res.status(400).json({
+                success: false,
+                message: "Search query is required"
+            });
         }
 
-        const journals = await Journal.find({
-            $or: [
-                { title: { $regex: query, $options: 'i' } },
-                { abstract: { $regex: query, $options: 'i' } },
-                { keywords: { $regex: query, $options: 'i' } }
-            ]
-        }).sort({ createdAt: -1 });
+        // Use safe query builder
+        const searchFields = field === 'all'
+            ? ['title', 'abstract', 'keywords']
+            : [field];
 
-        res.json(journals);
+        const safeQuery = req.dbSecurity.buildSafeQuery(searchFields, query, {
+            caseSensitive: false,
+            exactMatch: false
+        });
+
+        // Add pagination
+        const { page, limit, skip } = req.dbSecurity.buildSafePagination(
+            req.query.page,
+            req.query.limit
+        );
+
+        const journals = await Journal.find(safeQuery)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .select('-__v'); // Exclude version field
+
+        const total = await Journal.countDocuments(safeQuery);
+
+        res.json({
+            success: true,
+            journals,
+            pagination: {
+                page,
+                limit,
+                total,
+                pages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
+        logSecurityEvent('SEARCH_ERROR', req, { error: error.message });
         res.status(500).json({
+            success: false,
             message: "Search failed",
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };

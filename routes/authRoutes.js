@@ -14,17 +14,52 @@
 const express = require('express');
 const { register, login, logout, forgotPassword, resetPassword, updateUser, getProfile, createAdmin } = require('../controllers/authController');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
+const { rateLimits, validationRules, handleValidationErrors } = require('../middleware/security');
 const router = express.Router();
 
-router.post('/register', register);
-router.post('/login', login);
+// Apply strict rate limiting to auth routes
+router.use(rateLimits.auth);
+
+// Registration with validation
+router.post('/register',
+    validationRules.userRegistration,
+    handleValidationErrors,
+    register
+);
+
+// Login with validation
+router.post('/login',
+    validationRules.userLogin,
+    handleValidationErrors,
+    login
+);
+
+// Logout (protected)
 router.post('/logout', protect, logout);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password/:token', resetPassword); // Route for resetting password with token in URL
-router.post('/reset-password', resetPassword); // Alternative route for resetting password with token in body
-router.put('/profile', protect, updateUser); // Route for updating user
-router.get('/profile', protect, getProfile); // Route for getting user profile
-router.get('/me', protect, getProfile); // Alias for /profile to match frontend expectations
-router.post('/create-admin', protect, adminOnly, createAdmin); // Route for creating admin users (admin only)
+
+// Forgot password with validation
+router.post('/forgot-password',
+    [validationRules.userLogin[0]], // Only email validation
+    handleValidationErrors,
+    forgotPassword
+);
+
+// Reset password routes
+router.post('/reset-password/:token', resetPassword);
+router.post('/reset-password', resetPassword);
+
+// Profile routes (protected)
+router.put('/profile', protect, updateUser);
+router.get('/profile', protect, getProfile);
+router.get('/me', protect, getProfile);
+
+// Admin routes (protected + admin only)
+router.post('/create-admin',
+    protect,
+    adminOnly,
+    validationRules.userRegistration,
+    handleValidationErrors,
+    createAdmin
+);
 
 module.exports = router;

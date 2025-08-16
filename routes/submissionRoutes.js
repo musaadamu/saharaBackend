@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const submissionController = require('../controllers/submissionController');
+const { rateLimits, validationRules, handleValidationErrors } = require('../middleware/security');
 
 // Upload submission with file - use the same approach as journalRoutes
 router.post("/", (req, res, next) => {

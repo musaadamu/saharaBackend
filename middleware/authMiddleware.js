@@ -1,29 +1,107 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { logSecurityEvent } = require('./errorHandler');
 
-exports.protect = (req, res, next) => {
+exports.protect = async (req, res, next) => {
     let token;
-    console.log('Auth headers:', req.headers.authorization);
 
+    // Extract token from Authorization header or cookies
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         token = req.headers.authorization.split(' ')[1];
-        console.log('Token extracted:', token ? 'Token found' : 'No token');
+    } else if (req.cookies && req.cookies.token) {
+        token = req.cookies.token;
     }
 
     if (!token) {
-        console.log('Authorization failed: No token provided');
-        return res.status(401).json({ message: 'Not authorized to access this route' });
+        logSecurityEvent('UNAUTHORIZED_ACCESS_ATTEMPT', req, { reason: 'No token provided' });
+        return res.status(401).json({
+            success: false,
+            message: 'Access denied. No token provided.'
+        });
     }
 
     try {
+        // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log('Token verified successfully for user:', decoded.id);
-        req.user = decoded; // Assuming the token contains user information
+
+        // Check if user still exists
+        const user = await User.findById(decoded.id).select('-password');
+        if (!user) {
+            logSecurityEvent('INVALID_TOKEN_USER_NOT_FOUND', req, { userId: decoded.id });
+            return res.status(401).json({
+                success: false,
+                message: 'Token is no longer valid.'
+            });
+        }
+
+        // Check if token was issued before password change (if implemented)
+        // This would require adding a passwordChangedAt field to User model
+
+        req.user = user;
         next();
     } catch (err) {
-        console.log('Token verification failed:', err.message);
-        return res.status(401).json({ message: 'Not authorized to access this route' });
+        let message = 'Invalid token';
+        if (err.name === 'TokenExpiredError') {
+            message = 'Token has expired';
+            logSecurityEvent('EXPIRED_TOKEN_ACCESS', req, { error: err.message });
+        } else if (err.name === 'JsonWebTokenError') {
+            message = 'Invalid token format';
+            logSecurityEvent('INVALID_TOKEN_ACCESS', req, { error: err.message });
+        } else {
+            logSecurityEvent('TOKEN_VERIFICATION_ERROR', req, { error: err.message });
+        }
+
+        return res.status(401).json({
+            success: false,
+            message: message
+        });
     }
+};
+
+// Admin-only access middleware
+exports.adminOnly = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({
+            success: false,
+            message: 'Authentication required'
+        });
+    }
+
+    if (req.user.role !== 'admin') {
+        logSecurityEvent('UNAUTHORIZED_ADMIN_ACCESS', req, {
+            userId: req.user.id,
+            userRole: req.user.role
+        });
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Admin privileges required.'
+        });
+    }
+
+    next();
+};
+
+// Editor or Admin access middleware
+exports.editorOrAdmin = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({
+            success: false,
+            message: 'Authentication required'
+        });
+    }
+
+    if (!['editor', 'admin'].includes(req.user.role)) {
+        logSecurityEvent('UNAUTHORIZED_EDITOR_ACCESS', req, {
+            userId: req.user.id,
+            userRole: req.user.role
+        });
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Editor or Admin privileges required.'
+        });
+    }
+
+    next();
 };
 
 // Admin only middleware
