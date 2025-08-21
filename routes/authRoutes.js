@@ -14,11 +14,11 @@
 const express = require('express');
 const { register, login, logout, forgotPassword, resetPassword, updateUser, getProfile, createAdmin } = require('../controllers/authController');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
-const { rateLimits, validationRules, handleValidationErrors } = require('../middleware/security');
+const { validationRules, handleValidationErrors } = require('../middleware/security');
 const router = express.Router();
 
 // Apply strict rate limiting to auth routes
-router.use(rateLimits.auth);
+// router.use(rateLimits.auth); // Rate limiting removed for auth endpoints
 
 // Registration with validation
 router.post('/register',
