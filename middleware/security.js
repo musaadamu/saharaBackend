@@ -153,26 +153,31 @@ const validationRules = {
             .trim()
             .isLength({ min: 5, max: 200 })
             .withMessage('Title must be between 5 and 200 characters'),
-        
+
         body('abstract')
             .trim()
             .isLength({ min: 50, max: 2000 })
             .withMessage('Abstract must be between 50 and 2000 characters'),
-        
+
+        // Allow authors as a string or array, and allow special characters
         body('authors')
-            .isArray({ min: 1 })
-            .withMessage('At least one author is required'),
-        
-        body('authors.*')
-            .trim()
-            .isLength({ min: 2, max: 100 })
-            .withMessage('Each author name must be between 2 and 100 characters'),
-        
+            .custom((value) => {
+                if (Array.isArray(value)) {
+                    return value.length > 0 && value.every(
+                        (author) => typeof author === 'string' && author.trim().length >= 2 && author.trim().length <= 100
+                    );
+                } else if (typeof value === 'string') {
+                    return value.trim().length >= 2 && value.trim().length <= 500;
+                }
+                return false;
+            })
+            .withMessage('Authors must be a non-empty string or array of names (2-100 chars each, special characters allowed).'),
+
         body('keywords')
             .optional()
             .isArray()
             .withMessage('Keywords must be an array'),
-        
+
         body('keywords.*')
             .optional()
             .trim()
