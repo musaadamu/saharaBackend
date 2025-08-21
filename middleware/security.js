@@ -156,8 +156,8 @@ const validationRules = {
 
         body('abstract')
             .trim()
-            .isLength({ min: 50, max: 2000 })
-            .withMessage('Abstract must be between 50 and 2000 characters'),
+            .isLength({ min: 50 })
+            .withMessage('Abstract must be at least 50 characters'),
 
         // Allow authors as a string or array, and allow special characters
         body('authors')
@@ -173,16 +173,20 @@ const validationRules = {
             })
             .withMessage('Authors must be a non-empty string or array of names (2-100 chars each, special characters allowed).'),
 
+        // Allow keywords as a string or array
         body('keywords')
             .optional()
-            .isArray()
-            .withMessage('Keywords must be an array'),
-
-        body('keywords.*')
-            .optional()
-            .trim()
-            .isLength({ min: 2, max: 50 })
-            .withMessage('Each keyword must be between 2 and 50 characters')
+            .custom((value) => {
+                if (Array.isArray(value)) {
+                    return value.every(
+                        (kw) => typeof kw === 'string' && kw.trim().length >= 2 && kw.trim().length <= 50
+                    );
+                } else if (typeof value === 'string') {
+                    return value.trim().length >= 2 && value.trim().length <= 200;
+                }
+                return false;
+            })
+            .withMessage('Keywords must be a string (2-200 chars) or array of strings (2-50 chars each)')
     ],
 
     // Search validation
