@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const submissionController = require('../controllers/submissionController');
-const { rateLimits, validationRules, handleValidationErrors } = require('../middleware/security');
+const { validationRules, handleValidationErrors } = require('../middleware/security');
 const { postUploadValidation } = require('../middleware/secureFileUpload');
 
 // Upload submission with enhanced security
 router.post("/",
-    rateLimits.upload,
+    // rateLimits.upload, // removed
     (req, res, next) => {
         submissionController.uploadMiddleware(req, res, (err) => {
             if (err) {

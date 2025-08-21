@@ -1,13 +1,13 @@
 const express = require("express");
 const journalController = require("../controllers/journalController");
-const { rateLimits, validationRules, handleValidationErrors } = require('../middleware/security');
+const { validationRules, handleValidationErrors } = require('../middleware/security');
 const { postUploadValidation } = require('../middleware/secureFileUpload');
 
 const router = express.Router();
 
 // Upload journal route with enhanced security
 router.post("/",
-    rateLimits.upload,
+    // rateLimits.upload, // removed
     (req, res, next) => {
         console.log('journalRoutes POST / upload route invoked');
         journalController.uploadMiddleware(req, res, (err) => {
@@ -58,7 +58,7 @@ router.get("/file-info", journalController.getJournalsFileInfo);
 
 // Search journals with validation and rate limiting
 router.get("/search",
-    rateLimits.search,
+    // rateLimits.search, // removed
     validationRules.search,
     handleValidationErrors,
     journalController.searchJournals
