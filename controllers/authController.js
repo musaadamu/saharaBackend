@@ -235,12 +235,12 @@ exports.updateUser = async (req, res) => {
 // Create Admin User (Only accessible by existing admins)
 exports.createAdmin = async (req, res) => {
     try {
-        // Check if the requesting user is an admin
-        if (req.user.role !== "admin") {
-            return res.status(403).json({ message: "Access denied. Only admins can create admin accounts." });
-        }
+        // // Check if the requesting user is an admin
+        // if (req.user.role !== "admin") {
+        //     return res.status(403).json({ message: "Access denied. Only admins can create admin accounts." });
+        // }
 
-        const { name, email, password } = req.body;
+        // const { name, email, password } = req.body;
 
         // Validate inputs
         if (!name || !email || !password) {
